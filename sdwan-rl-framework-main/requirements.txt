@@ -1,0 +1,7 @@
+mininet
+gym==0.26.2
+tensorflow>=2.11
+numpy
+pandas
+matplotlib
+requests

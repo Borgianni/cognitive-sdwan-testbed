@@ -362,16 +362,8 @@ This testbed can be used to evaluate:
 
 ## Citation
 
-If you use this framework in academic work, please cite:
+If you use this framework in academic work, please cite: TBD 
 
-```bibtex
-@article{borgianni2025cognitive,
-  title={Cognitive Traffic Engineering in SD-WANs: A Reinforcement Learning Emulation Testbed},
-  author={Borgianni, Luca and others},
-  journal={IEEE Transactions on Network and Service Management},
-  year={2025}
-}
-```
 
 ---
 

@@ -26,6 +26,9 @@ if __name__ == "__main__":
     parser.add_argument("--sat-residual-threshold", type=float,
                         default=RLConfig.sat_residual_threshold,
                         help="Minimum LEO residual capacity fraction (0, 1]")
+    parser.add_argument("--mode", choices=["online", "frozen"], default="online")
+    parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
+    parser.add_argument("--trace", help="New JSONL policy trace file")
     args = parser.parse_args()
     
     run_experiment(
@@ -38,5 +41,6 @@ if __name__ == "__main__":
                         bandwidth_state_mode=args.bandwidth_state_mode,
                         lte_residual_threshold=args.lte_residual_threshold,
                         sat_residual_threshold=args.sat_residual_threshold),
+        mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         start_cli=args.cli
     )

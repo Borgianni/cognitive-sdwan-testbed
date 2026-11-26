@@ -7,6 +7,10 @@ import time
 import argparse
 from typing import Dict, Tuple
 import random
+from dataclasses import asdict
+from pathlib import Path
+
+from .policy_audit import append_trace, load_frozen, save_checkpoint, weights_digest, metadata_path
 
 from .topology import SDWANTopo
 from .metrics import measure_link_tuple
@@ -58,13 +62,27 @@ def set_degradation(net, episode: int, ranges: Tuple[Tuple[int, int], ...]):
 # ----------------------------------------------------------------------
 # Experiment runner with configurable agent
 # ----------------------------------------------------------------------
-def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None):
+def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
+                   mode='online', checkpoint=None, trace=None):
     """
     agent_type: 'dqn' or 'random'
     """
     exp = exp if exp is not None else ExperimentConfig()
     rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
     episode_count = exp.episodes if episodes is None else episodes
+    if mode not in ("online", "frozen"):
+        raise ValueError("Unknown experiment mode")
+    if mode == "frozen" and (agent_type != "dqn" or not checkpoint or not trace):
+        raise ValueError("Frozen evaluation requires DQN, --checkpoint and --trace")
+    if checkpoint and agent_type != "dqn":
+        raise ValueError("Checkpoints are supported only for DQN")
+    if trace and agent_type != "dqn":
+        raise ValueError("Policy traces are supported only for DQN")
+    if mode == "online" and checkpoint:
+        if Path(checkpoint).suffix != ".keras":
+            raise ValueError("Use a .keras checkpoint filename")
+        if Path(checkpoint).exists() or metadata_path(checkpoint).exists():
+            raise FileExistsError(str(checkpoint))
     print(f"[INFO] Packet-loss thresholds: LTE={rl_cfg.lte_loss_threshold_pct}%, "
           f"LEO={rl_cfg.sat_loss_threshold_pct}%")
     print(f"[INFO] RTT thresholds: LTE={rl_cfg.lte_delay_threshold_ms} ms, "
@@ -72,10 +90,6 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     print(f"[INFO] Bandwidth state: {rl_cfg.bandwidth_state_mode}; "
           f"residual thresholds LTE={rl_cfg.lte_residual_threshold}, "
           f"LEO={rl_cfg.sat_residual_threshold}")
-    topo = SDWANTopo()
-    net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
-    net.start()
-    api = ControllerAPI()
     env = SDWANEnv(cfg=rl_cfg)
 
     # --- Agent instantiation ---
@@ -91,15 +105,34 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     else:
         raise ValueError(f"Unknown agent_type: {agent_type} (use 'dqn' or 'random')")
 
+    initial_weights = None
+    if mode == "frozen":
+        load_frozen(agent, rl_cfg, checkpoint)
+        initial_weights = weights_digest(agent)
+    if trace:
+        append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
+                            "initial_weights_sha256": weights_digest(agent),
+                            "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
+                            "episode_count": episode_count}, mode="x")
+    topo = SDWANTopo()
+    net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
+    api = ControllerAPI()
+
     try:
+        net.start()
         for ep in range(1, episode_count + 1):
             set_degradation(net, ep, exp.degrade_lte_ranges)
             env.reset_metrics()
             state = env.make_state().vec
+            decision_metrics = None
 
             for t in range(exp.ticks_per_episode):
                 # 1) Agent selects action
-                action = agent.act(state)  # 0 = LTE, 1 = Satellite
+                if trace:
+                    eps_before = agent.eps
+                    action, q_values, exploratory = agent.traced_action(state)
+                else:
+                    action = agent.act(state)  # 0 = LTE, 1 = Satellite
 
                 # 2) Measure both links
                 lte_d, lte_thr, lte_loss = measure_link_tuple(net, "lte")
@@ -124,13 +157,22 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 next_state = env.make_state().vec
 
                 # 6) Experience replay & training (only for DQN)
-                if agent_type == 'dqn':
+                if trace:
+                    append_trace(trace, {
+                        "kind": "decision", "episode": ep, "tick": t,
+                        "decision_metrics": decision_metrics,
+                        "state": state.tolist(), "q_values": q_values.tolist(),
+                        "greedy_action": int(q_values.argmax()), "action": int(action),
+                        "exploratory": bool(exploratory), "epsilon": eps_before,
+                        "measurement_metrics": metrics, "reward": r,
+                        "next_state": next_state.tolist(),
+                        "controller_reported_choice": chosen,
+                    })
+                if agent_type == 'dqn' and mode == "online":
                     agent.remember(state, action, r, next_state, done)
                     agent.train_step()
-                else:
-                    # For Random agent, optionally log reward
-                    pass
 
+                decision_metrics = metrics
                 state = next_state
 
             # end ticks
@@ -139,6 +181,14 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 print(f"[Episode {ep}] Random agent done (no learning)")
         # end episodes
 
+        if mode == "frozen":
+            if weights_digest(agent) != initial_weights or agent.eps != 0 or len(agent.memory):
+                raise RuntimeError("Frozen evaluation changed weights, epsilon or replay")
+        if mode == "online" and checkpoint:
+            save_checkpoint(agent, rl_cfg, checkpoint)
+        if trace:
+            append_trace(trace, {"kind": "complete", "weights_sha256": weights_digest(agent),
+                                 "epsilon": agent.eps, "replay_size": len(agent.memory)})
         if start_cli:
             print("Entering Mininet CLI (type 'exit' to quit)...")
             CLI(net)
@@ -177,6 +227,9 @@ if __name__ == "__main__":
     parser.add_argument("--sat-residual-threshold", type=float,
                         default=RLConfig.sat_residual_threshold,
                         help="Minimum LEO residual capacity fraction (0, 1]")
+    parser.add_argument("--mode", choices=["online", "frozen"], default="online")
+    parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
+    parser.add_argument("--trace", help="New JSONL policy trace file")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -191,4 +244,5 @@ if __name__ == "__main__":
                       bandwidth_state_mode=args.bandwidth_state_mode,
                       lte_residual_threshold=args.lte_residual_threshold,
                       sat_residual_threshold=args.sat_residual_threshold)
-    run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli)
+    run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
+                   mode=args.mode, checkpoint=args.checkpoint, trace=args.trace)

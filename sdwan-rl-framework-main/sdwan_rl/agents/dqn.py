@@ -18,6 +18,7 @@ class DQNAgent(Agent):
         self.eps_decay = eps_decay
         self.memory = deque(maxlen=replay_size)
         self.model = self._build(lr)
+        self.frozen = False
 
     def _build(self, lr):
         model = models.Sequential([
@@ -29,17 +30,33 @@ class DQNAgent(Agent):
         model.compile(loss="mse", optimizer=optimizers.Adam(learning_rate=lr))
         return model
 
+    def q_values(self, state: np.ndarray) -> np.ndarray:
+        return self.model.predict(np.asarray(state, dtype=np.float32)[np.newaxis, :],
+                                  verbose=0)[0]
+
+    def freeze(self):
+        """Disable exploration, replay insertion and optimizer updates."""
+        self.frozen = True
+        self.eps = 0.0
+
     def act(self, state: np.ndarray) -> int:
-        if np.random.rand() < self.eps:
+        if not self.frozen and np.random.rand() < self.eps:
             return random.randrange(self.action_size)
-        q = self.model.predict(state[np.newaxis, :], verbose=0)[0]
-        return int(np.argmax(q))
+        return int(np.argmax(self.q_values(state)))
+
+    def traced_action(self, state: np.ndarray):
+        """Capture Q-values and exploration before any training update."""
+        q = self.q_values(state)
+        exploratory = not self.frozen and np.random.rand() < self.eps
+        action = random.randrange(self.action_size) if exploratory else int(np.argmax(q))
+        return action, q, exploratory
 
     def remember(self, s, a, r, s2, done):
-        self.memory.append((s, a, r, s2, done))
+        if not self.frozen:
+            self.memory.append((s, a, r, s2, done))
 
     def train_step(self):
-        if len(self.memory) < self.batch_size: return
+        if self.frozen or len(self.memory) < self.batch_size: return
         batch = random.sample(self.memory, self.batch_size)
         for s, a, r, s2, done in batch:
             target = r if done else r + self.gamma * np.max(self.model.predict(s2[np.newaxis, :], verbose=0)[0])

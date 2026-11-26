@@ -9,6 +9,7 @@ from .agents.utility import GreedyUtilityAgent, finite, snapshot_utilities, vali
 from .agents.ewma import EWMALatencyAgent
 from .agents.uniform_random import UniformRandomAgent
 from .config import RLConfig
+from .cost_audit import cost_qos_summary
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
 
@@ -131,6 +132,10 @@ def audit_trace(path):
             "model_weights_sha256": initial,
             "training_protocol": header.get("training_protocol"),
             "ticks": len(rewards), "mean_logged_reward_all_ticks": fmean(rewards),
+            "cost_qos": cost_qos_summary(rows[1:-1], cfg),
+            "cost_qos_by_episode": [{"episode": ep, **cost_qos_summary(
+                rows[1 + (ep - 1) * ticks:1 + ep * ticks], cfg)}
+                for ep in range(1, episodes + 1)],
             "decision_time_snapshot": summarize(decision),
             "subsequent_measurement_snapshot": summarize(measured),
             "interpretation": "Paired snapshot diagnostics; subsequent measurements are hindsight only. "
@@ -185,10 +190,21 @@ def paired_report(reports, seeds, agents=BENCHMARK_AGENTS):
     summaries = []
     for scenario in scenarios:
         for agent in agents:
-            values = [observed[(agent, seed, scenario)]["mean_logged_reward_all_ticks"] for seed in seeds]
+            runs = [observed[(agent, seed, scenario)] for seed in seeds]
+            values = [r["mean_logged_reward_all_ticks"] for r in runs]
+            cost_qos_stats = {}
+            for metric in ("reward_to_cost_ratio", "mean_selected_cost_index",
+                           "mean_qos_utility_valid_selected", "mean_selected_rtt_ms",
+                           "mean_selected_loss_pct", "mean_selected_residual_mbps",
+                           "lte_selection_fraction"):
+                numbers = [r["cost_qos"][metric] for r in runs if r["cost_qos"][metric] is not None]
+                cost_qos_stats[metric] = {
+                    "n_seeds": len(numbers), "mean": fmean(numbers) if numbers else None,
+                    "sample_sd": stdev(numbers) if len(numbers) > 1 else None}
             summaries.append({"scenario_id": scenario, "agent": agent, "n_seeds": len(seeds),
                               "mean_logged_reward": fmean(values),
-                              "sample_sd_across_seeds": stdev(values) if len(values) > 1 else None})
+                              "sample_sd_across_seeds": stdev(values) if len(values) > 1 else None,
+                              "cost_qos_across_seeds": cost_qos_stats})
     return {"manifest_sha256": ref["manifest_sha256"], "seeds": seeds,
             "agents": agents, "scenario_ids": scenarios, "summaries": summaries,
             "interpretation": "Descriptive run-level summaries only; no significance claims. "

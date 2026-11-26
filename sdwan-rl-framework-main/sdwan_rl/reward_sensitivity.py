@@ -117,8 +117,14 @@ def policy_report(paths, plan):
     expected = {(name, seed, scenario) for name in configurations
                 for seed in plan["seeds"] for scenario in plan["test_scenario_ids"]}
     observed, models = {}, {}
+    telemetry_config = None
+    have_config = False
     for path in paths:
         row = score_trace(path, base)
+        if have_config and row.get("telemetry_config") != telemetry_config:
+            raise ValueError("Sensitivity runs use different telemetry configurations")
+        telemetry_config = row.get("telemetry_config")
+        have_config = True
         matches = [name for name, cfg in configurations.items() if cfg == row["rl_config"]]
         if len(matches) != 1:
             raise ValueError("Unexpected reward configuration")

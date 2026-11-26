@@ -88,7 +88,8 @@ def read_run(path, split):
                           "mean_reward": fmean(rewards), "mean_epsilon": fmean(epsilons),
                           "exploration_fraction": fmean(exploration)})
     return {"path": str(path), "seed": seed, "protocol": protocol,
-            "rl_config": header["rl_config"], "initial_weights_sha256": initial,
+            "rl_config": header["rl_config"], "telemetry_config": header.get("telemetry_config"),
+            "initial_weights_sha256": initial,
             "final_weights_sha256": final, "training_protocol": header.get("training_protocol"),
             "episodes": summaries, "mean_reward": fmean(e["mean_reward"] for e in summaries)}
 
@@ -99,6 +100,7 @@ def report(training_paths, evaluation_paths=()):
         raise ValueError("At least two distinct training seeds are required")
     ref = training[0]
     if any(r["protocol"] != ref["protocol"] or r["rl_config"] != ref["rl_config"]
+           or r.get("telemetry_config") != ref.get("telemetry_config")
            for r in training):
         raise ValueError("Training curves require the same scenario and RL configuration")
     # Distinct seeds are necessary; equal initial digests suggest accidental reuse.
@@ -134,6 +136,7 @@ def report(training_paths, evaluation_paths=()):
         train = by_seed[r["seed"]]
         if (r["training_protocol"] != train["protocol"]
                 or r["rl_config"] != train["rl_config"]
+                or r.get("telemetry_config") != train.get("telemetry_config")
                 or r["initial_weights_sha256"] != train["final_weights_sha256"]):
             raise ValueError("Frozen evaluation does not match its training trace")
     if actual != expected:

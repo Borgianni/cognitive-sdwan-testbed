@@ -43,7 +43,7 @@ def validate_run_seed(seed, required=False):
         raise ValueError("Use an explicit integer run seed in [0, 2**32-1]")
 
 
-def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None):
+def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None, measurement_settings=None):
     validate_run_seed(run_seed, required=protocol is not None and protocol["split"] == "train")
     if cfg.dqn_version != CURRENT_DQN or agent.settings() != training_settings(cfg):
         raise ValueError("Checkpoint training settings differ from declared DQN configuration")
@@ -59,7 +59,8 @@ def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None):
             "training_protocol": protocol, "training_seed": run_seed,
             "dqn_training_state": agent.training_state(),
             "runtime_environment": runtime_environment(),
-            "checkpoint_purpose": "frozen_inference_only"}
+            "checkpoint_purpose": "frozen_inference_only",
+            "measurement_settings": measurement_settings}
     with metadata_path(path).open("x", encoding="utf-8") as stream:
         json.dump(meta, stream, indent=2)
 
@@ -87,7 +88,7 @@ def checkpoint_config(path):
     return RLConfig.from_record(fields), meta
 
 
-def load_frozen(agent, cfg, path, protocol=None, run_seed=None):
+def load_frozen(agent, cfg, path, protocol=None, run_seed=None, measurement_settings=None):
     saved_cfg, meta = checkpoint_config(path)
     if asdict(saved_cfg) != asdict(cfg):
         raise ValueError("Evaluation configuration differs from training checkpoint")
@@ -95,6 +96,8 @@ def load_frozen(agent, cfg, path, protocol=None, run_seed=None):
         if cfg.dqn_version != CURRENT_DQN:
             raise ValueError("Legacy DQN checkpoints are diagnostic-only")
         validate_training_provenance(meta.get("training_protocol"), protocol)
+        if measurement_settings is not None and meta.get("measurement_settings") != measurement_settings:
+            raise ValueError("Measurement configuration differs from training checkpoint")
         validate_run_seed(run_seed, required=True)
         if type(meta.get("training_seed")) is not int or meta["training_seed"] != run_seed:
             raise ValueError("Evaluation run seed must match the training checkpoint seed")

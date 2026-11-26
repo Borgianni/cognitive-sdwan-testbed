@@ -12,6 +12,7 @@ from .config import RLConfig
 from .cost_audit import cost_qos_summary
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
+from .telemetry_core import TelemetryConfig, observation_index, observation_age
 
 
 def snapshot_gap(metrics, action, cfg):
@@ -57,6 +58,7 @@ def audit_trace(path):
     if resolve_run(protocol["manifest"], protocol["scenario_id"], "held_out_test", mode) != protocol:
         raise ValueError("Invalid scenario provenance")
     cfg = RLConfig.from_record(header["rl_config"])
+    telemetry_cfg = TelemetryConfig(**header["telemetry_config"]) if header.get("telemetry_schema") == 1 else None
     episodes, ticks = (protocol["scenario"][k] for k in ("episodes", "ticks_per_episode"))
     if header.get("episode_count") != episodes or len(rows) != episodes * ticks + 2:
         raise ValueError("Trace does not match declared tick budget")
@@ -102,8 +104,20 @@ def audit_trace(path):
         current = row["measurement_metrics"]
         if tick == 0 and previous is not None:
             raise ValueError("Expected reset decision observation")
-        if tick != 0 and previous != rows[index]["measurement_metrics"]:
-            raise ValueError("Decision telemetry must match the preceding tick")
+        source_tick = observation_index(tick, telemetry_cfg.observation_lag_ticks if telemetry_cfg else 0)
+        if source_tick is not None:
+            source = rows[1 + (ep - 1) * ticks + source_tick]
+            if previous != source["measurement_metrics"]:
+                raise ValueError("Decision telemetry must match the declared past tick")
+        if telemetry_cfg is not None:
+            expected_age = None if source_tick is None else observation_age(
+                source["measurement_windows"], row["decision_time_s"])
+            if (row.get("decision_source_tick") != source_tick or row.get("decision_age") != expected_age):
+                raise ValueError("Decision source or telemetry age differs from recorded windows")
+            if row.get("controller_ack", {}).get("action") != action or row["controller_ack"].get("barrier_acknowledged") is not True:
+                raise ValueError("Missing acknowledged routing action")
+            if row["decision_acknowledged_s"] > row["telemetry"]["window_start_s"]:
+                raise ValueError("Measurement started before the routing decision was acknowledged")
         if agent == "dqn":
             q = row.get("q_values")
             if (not isinstance(q, list) or len(q) != 2 or not all(finite(v) for v in q)
@@ -127,6 +141,7 @@ def audit_trace(path):
     return {"path": str(path), "agent": agent, "seed": seed,
             "scenario_id": protocol["scenario_id"], "manifest_sha256": protocol["manifest_sha256"],
             "rl_config": header["rl_config"], "heuristic_config": heuristic_config,
+            "telemetry_config": header.get("telemetry_config"),
             "test_scenario_ids": sorted(r["id"] for r in protocol["manifest"]["scenarios"]
                                         if r["split"] == "held_out_test"),
             "model_weights_sha256": initial,
@@ -175,7 +190,8 @@ def paired_report(reports, seeds, agents=BENCHMARK_AGENTS):
         if key not in expected or key in observed:
             raise ValueError("Unexpected or duplicate benchmark result")
         if (row["manifest_sha256"] != ref["manifest_sha256"]
-                or row["test_scenario_ids"] != scenarios or common_cfg(row) != common_cfg(ref)):
+                or row["test_scenario_ids"] != scenarios or common_cfg(row) != common_cfg(ref)
+                or row.get("telemetry_config") != ref.get("telemetry_config")):
             raise ValueError("Benchmark runs do not share scenario manifest and common configuration")
         config = (row["rl_config"], row["heuristic_config"])
         if policy_configs.setdefault(row["agent"], config) != config:

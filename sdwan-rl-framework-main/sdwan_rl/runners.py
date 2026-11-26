@@ -1,5 +1,5 @@
 from mininet.net import Mininet
-from mininet.node import OVSSwitch
+from mininet.node import OVSSwitch, RemoteController
 from mininet.cli import CLI
 from mininet.clean import cleanup
 
@@ -7,6 +7,7 @@ import time
 import argparse
 from typing import Dict, Tuple
 import random
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,7 +17,9 @@ from .scenario_runtime import ScenarioRuntime
 from .scenario_profiles import nominal_profiles
 
 from .topology import SDWANTopo
-from .metrics import measure_link_tuple
+from .telemetry_core import TelemetryConfig, observation_age, observation_index
+from .telemetry_cli import add_telemetry_arguments, telemetry_kwargs, runtime_scenario
+from .telemetry_runtime import TelemetryCollector
 from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
@@ -32,26 +35,12 @@ HEURISTIC_AGENTS = ("ewma", "greedy_utility", "random")
 
 
 # ----------------------------------------------------------------------
-# Degradation handling
-# ----------------------------------------------------------------------
-def set_degradation(net, episode: int, ranges: Tuple[Tuple[int, int], ...]):
-    s1, s3 = net.get('s1', 's3')
-    degraded = any(lo <= episode <= hi for lo, hi in ranges)
-    if degraded:
-        s1.cmd("tc qdisc change dev s1-eth1 root netem delay 150ms loss 20%")
-        s3.cmd("tc qdisc change dev s3-eth1 root netem delay 150ms loss 20%")
-    else:
-        s1.cmd("tc qdisc change dev s1-eth1 root netem delay 25ms loss 2%")
-        s3.cmd("tc qdisc change dev s3-eth1 root netem delay 25ms loss 2%")
-
-
-# ----------------------------------------------------------------------
 # Experiment runner with configurable agent
 # ----------------------------------------------------------------------
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
                    mode='online', checkpoint=None, trace=None,
                    split='diagnostic', manifest_path=None, scenario_id=None, seed=None,
-                   ewma_alpha=0.3):
+                   ewma_alpha=0.3, telemetry_cfg=None):
     """
     agent_type: 'dqn', 'random', 'ewma' or 'greedy_utility'
     """
@@ -79,13 +68,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         exp = exp if exp is not None else ExperimentConfig()
     print(f"[INFO] Protocol split: {split}; scenario: {scenario_id or 'diagnostic'}")
     rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
+    telemetry_cfg = telemetry_cfg if telemetry_cfg is not None else TelemetryConfig()
+    if telemetry_cfg.observation_lag_ticks and (agent_type != 'dqn' or mode != 'frozen'):
+        raise ValueError('Artificial telemetry lag is a frozen DQN diagnostic only')
     episode_count = exp.episodes if episodes is None else episodes
-    use_v2 = scenario is not None and "events" in scenario
-    if use_v2:
-        nominal = nominal_profiles()
-        if (rl_cfg.lte_capacity_mbps != nominal["lte"]["capacity_mbps"]
-                or rl_cfg.sat_capacity_mbps != nominal["satellite"]["capacity_mbps"]):
-            raise ValueError("RL capacities must match the v2 topology")
+    nominal = nominal_profiles()
+    if (rl_cfg.lte_capacity_mbps != nominal["lte"]["capacity_mbps"]
+            or rl_cfg.sat_capacity_mbps != nominal["satellite"]["capacity_mbps"]):
+        raise ValueError("RL capacities must match the topology")
+    network_scenario = runtime_scenario(scenario, exp, episode_count)
     if mode not in ("online", "frozen", "heuristic"):
         raise ValueError("Unknown experiment mode")
     if mode == "frozen" and (agent_type != "dqn" or not checkpoint or not trace):
@@ -114,6 +105,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
           f"weights(delay,loss,bw,cost)={(rl_cfg.w_b, rl_cfg.w_a, rl_cfg.w_c, rl_cfg.w_d)}; "
           f"cost indices={(rl_cfg.lte_cost_index, rl_cfg.sat_cost_index)}")
     env = SDWANEnv(cfg=rl_cfg)
+    decision_env = SDWANEnv(cfg=rl_cfg)
+    run_id = uuid.uuid4().hex
 
     # DQN seeds before model creation and owns separate exploration/replay RNGs.
     if seed is not None and agent_type != "dqn":
@@ -145,7 +138,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     initial_weights = None
     training_meta = None
     if mode == "frozen":
-        training_meta = load_frozen(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
+        training_meta = load_frozen(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed,
+                                    measurement_settings=telemetry_cfg.measurement_settings())
         initial_weights = weights_digest(agent)
     environment = runtime_environment()
     if trace:
@@ -155,6 +149,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                             "episode_count": episode_count, "protocol": protocol,
                             "agent_type": agent_type, "run_seed": seed,
                             "runtime_environment": environment,
+                            "telemetry_schema": 1, "telemetry_config": asdict(telemetry_cfg),
+                            "run_id": run_id,
                             "dqn_initial_training_state": agent.training_state() if agent_type == "dqn" else None,
                             "heuristic_config": {"alpha": agent.alpha, "reset_each_episode": True}
                             if agent_type == "ewma" else
@@ -165,54 +161,74 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                             "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
+    net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
     api = ControllerAPI()
-
-    runtime = None
+    runtime, collector = None, None
+    last_trace_write_s, last_tick_start = 0.0, None
+    run_start = time.monotonic()
+    current_ep, current_tick = None, None
+    latest_measurement = None
     try:
         net.start()
-        if use_v2:
-            runtime = ScenarioRuntime(net, scenario)
+        api.wait_ready()
+        runtime = ScenarioRuntime(net, network_scenario)
+        collector = TelemetryCollector(net, telemetry_cfg)
+        collector.install()
         for ep in range(1, episode_count + 1):
-            conditions = None
-            if runtime is not None:
-                conditions = runtime.apply_episode(ep)
-                if ep == 1:
-                    runtime.start_traffic()
-            else:
-                set_degradation(net, ep, exp.degrade_lte_ranges)
+            current_ep, current_tick = ep, None
+            setup_start = time.monotonic()
+            conditions = runtime.apply_episode(ep)
+            impairment_applied_s = time.monotonic()
+            if ep == 1:
+                runtime.start_traffic()
             env.reset_metrics()
-            state = env.make_state().vec
-            decision_metrics = None
-            episode_reward = 0.0
+            decision_env.reset_metrics()
+            history, episode_reward = [], 0.0
             if agent_type in HEURISTIC_AGENTS:
                 agent.reset()
-
+            episode_setup = {"start_s": setup_start, "impairment_applied_s": impairment_applied_s,
+                             "elapsed_s": time.monotonic() - setup_start}
             for t in range(exp.ticks_per_episode):
-                # 1) Agent selects action
+                current_tick = t
+                latest_measurement = None
+                tick_start = time.monotonic()
+                phases = {}
+                source_tick = observation_index(t, telemetry_cfg.observation_lag_ticks)
+                decision_metrics = None if source_tick is None else history[source_tick]["metrics"]
+                decision_windows = None if source_tick is None else history[source_tick]["windows"]
+                if decision_metrics is None:
+                    decision_env.reset_metrics()
+                else:
+                    decision_env.update_from_metrics(decision_metrics)
+                state = decision_env.make_state().vec
+                decision_s = time.monotonic()
+                age = observation_age(decision_windows, decision_s)
+                phases["observation_encoding_and_age_s"] = time.monotonic() - tick_start
+                phase_start = time.monotonic()
                 heuristic_details = None
                 if agent_type in HEURISTIC_AGENTS:
                     action, heuristic_details = agent.decide(decision_metrics)
-                    eps_before, q_values, exploratory = 0.0, None, False
-                    greedy_action = None  # no Q-function
-                elif trace:
+                    eps_before, q_values, exploratory, greedy_action = 0.0, None, False, None
+                else:
                     eps_before = agent.eps
                     action, q_values, exploratory = agent.traced_action(state)
                     greedy_action = int(q_values.argmax())
-                else:
-                    action = agent.act(state)  # 0 = LTE, 1 = Satellite
-
-                # 2) Measure both links
-                lte_d, lte_thr, lte_loss = measure_link_tuple(net, "lte")
-                sat_d, sat_thr, sat_loss = measure_link_tuple(net, "satellite")
-                traffic_counters = runtime.check_traffic() if runtime is not None else None
-
-                metrics = {
-                    "lte": {"delay": lte_d, "throughput": lte_thr, "packet_loss": lte_loss},
-                    "satellite": {"delay": sat_d, "throughput": sat_thr, "packet_loss": sat_loss},
-                    "episode": {"episode number": ep, "tick": t, "chosen link": int(action)}
-                }
-
-                # 3) Compute reward once; publish the same values used for learning.
+                phases["policy_decision_s"] = time.monotonic() - phase_start
+                phase_start = time.monotonic()
+                decision_id = f"{run_id}:{ep}:{t}"
+                ack = api.apply_decision(int(action), decision_id)
+                acknowledged_s = time.monotonic()
+                phases["rest_openflow_ack_s"] = acknowledged_s - phase_start
+                phase_start = time.monotonic()
+                latest_measurement = collector.collect(int(action))
+                phases["telemetry_collection_and_forwarding_checks_s"] = time.monotonic() - phase_start
+                phase_start = time.monotonic()
+                traffic_counters = runtime.check_traffic()
+                phases["background_traffic_checks_s"] = time.monotonic() - phase_start
+                phase_start = time.monotonic()
+                metrics = latest_measurement["metrics"]
+                metrics["episode"] = {"episode number": ep, "tick": t, "chosen link": int(action),
+                                      "decision_id": decision_id}
                 env.update_from_metrics(metrics)
                 terms = env.reward_terms(action)
                 r = terms["reward"]
@@ -220,76 +236,92 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 metrics["lte"]["cost_index"] = env.cost_index(A_LTE)
                 metrics["satellite"]["cost_index"] = env.cost_index(A_SAT)
                 metrics["episode"]["reward"] = r
-                metrics["episode"]["total reward"] = episode_reward  # cumulative within episode
-
-                # 4) Send to controller (forwarding validation is still pending).
-                api.send_metrics(metrics)
-                chosen = api.get_link_decision()
-                done = (t == exp.ticks_per_episode - 1)
-
-                # 5) Next state
-                next_state = env.make_state().vec
-
-                # 6) One optimizer update per eligible tick, no episode replay reset.
+                metrics["episode"]["total reward"] = episode_reward
+                history.append({"metrics": metrics, "windows": latest_measurement["measurement_windows"]})
+                done = t == exp.ticks_per_episode - 1
+                next_source = observation_index(t + 1, telemetry_cfg.observation_lag_ticks)
+                decision_env.update_from_metrics(history[next_source]["metrics"])
+                next_state = decision_env.make_state().vec
+                phases["reward_and_next_state_s"] = time.monotonic() - phase_start
+                phase_start = time.monotonic()
+                chosen = api.send_metrics(metrics)
+                if chosen != ack["link"]:
+                    raise RuntimeError("Controller log acknowledgement differs from applied decision")
+                phases["rest_metrics_log_s"] = time.monotonic() - phase_start
+                phase_start = time.monotonic()
                 update = None
                 if agent_type == "dqn" and mode == "online":
                     agent.remember(state, action, r, next_state, done)
                     update = agent.train_step()
+                phases["learning_s"] = time.monotonic() - phase_start
+                elapsed = time.monotonic() - tick_start
+                phases["other_tick_work_s"] = max(0.0, elapsed - sum(phases.values()))
                 if trace:
-                    append_trace(trace, {
+                    record = {
                         "kind": "decision", "episode": ep, "tick": t,
-                        "decision_metrics": decision_metrics,
-                        "state": state.tolist(),
-                        "q_values": q_values.tolist() if q_values is not None else None,
-                        "greedy_action": greedy_action, "action": int(action),
-                        "heuristic_details": heuristic_details,
+                        "decision_metrics": decision_metrics, "decision_source_tick": source_tick,
+                        "effective_observation_lag_ticks": None if source_tick is None else t - 1 - source_tick,
+                        "decision_time_s": decision_s, "decision_age": age,
+                        "state": state.tolist(), "q_values": q_values.tolist() if q_values is not None else None,
+                        "greedy_action": greedy_action, "action": int(action), "heuristic_details": heuristic_details,
                         "exploratory": bool(exploratory), "epsilon": eps_before,
-                        "measurement_metrics": metrics, "reward": r,
-                        "reward_terms": terms,
-                        "dqn_update": update,
-                        "dqn_training_state": agent.training_state() if agent_type == "dqn" else None,
-                        "terminal_transition": done,
-                        "next_state": next_state.tolist(),
-                        "controller_reported_choice": chosen,
-                        "scenario_conditions": conditions,
+                        "measurement_metrics": metrics, "reward": r, "reward_terms": terms,
+                        "measurement_windows": latest_measurement["measurement_windows"],
+                        "telemetry": latest_measurement, "controller_ack": ack,
+                        "decision_acknowledged_s": acknowledged_s,
+                        "dqn_update": update, "dqn_training_state": agent.training_state() if agent_type == "dqn" else None,
+                        "terminal_transition": done, "next_state": next_state.tolist(),
+                        "controller_reported_choice": chosen, "scenario_conditions": conditions,
                         "background_traffic_counters": traffic_counters,
-                    })
-                decision_metrics = metrics
-                state = next_state
-
-            # end ticks
-            # Optional: print episode summary
-            if agent_type == 'random':
-                print(f"[Episode {ep}] Random agent done (no learning)")
-        # end episodes
-
+                        "phase_timing_s": phases, "tick_start_s": tick_start, "tick_work_s": elapsed,
+                        "previous_trace_write_s": last_trace_write_s,
+                        "tick_start_interval_s": None if last_tick_start is None else tick_start - last_tick_start,
+                        "episode_setup": episode_setup if t == 0 else None,
+                    }
+                    write_start = time.monotonic()
+                    append_trace(trace, record)
+                    last_trace_write_s = time.monotonic() - write_start
+                last_tick_start = tick_start
         if mode == "frozen":
             if weights_digest(agent) != initial_weights or agent.eps != 0 or len(agent.memory):
                 raise RuntimeError("Frozen evaluation changed weights, epsilon or replay")
+        checkpoint_elapsed = None
         if mode == "online" and checkpoint:
-            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
+            phase_start = time.monotonic()
+            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed,
+                            measurement_settings=telemetry_cfg.measurement_settings())
+            checkpoint_elapsed = time.monotonic() - phase_start
         if trace:
             append_trace(trace, {"kind": "complete",
                                  "weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
                                  "epsilon": agent.eps if agent_type == "dqn" else 0.0,
                                  "replay_size": len(agent.memory) if agent_type == "dqn" else 0,
-                                 "dqn_final_training_state": agent.training_state() if agent_type == "dqn" else None})
+                                 "dqn_final_training_state": agent.training_state() if agent_type == "dqn" else None,
+                                 "last_trace_write_s": last_trace_write_s,
+                                 "checkpoint_elapsed_s": checkpoint_elapsed,
+                                 "run_elapsed_s": time.monotonic() - run_start})
         if start_cli:
-            print("Entering Mininet CLI (type 'exit' to quit)...")
             CLI(net)
-
+    except Exception as exc:
+        if trace:
+            append_trace(trace, {"kind": "failed", "episode": current_ep, "tick": current_tick,
+                                 "error": str(exc), "telemetry": latest_measurement,
+                                 "run_elapsed_s": time.monotonic() - run_start})
+        raise
     finally:
         try:
-            if runtime is not None:
-                runtime.close()
+            try:
+                if collector is not None:
+                    collector.close()
+            finally:
+                if runtime is not None:
+                    runtime.close()
         finally:
+            api.close()
             net.stop()
             cleanup()
 
 
-# ----------------------------------------------------------------------
-# Command‑line entry point
-# ----------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SD-WAN RL emulation")
     parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"],
@@ -333,6 +365,7 @@ if __name__ == "__main__":
                         help="Weight on the newest RTT sample for EWMA")
     add_reward_arguments(parser)
     add_dqn_arguments(parser)
+    add_telemetry_arguments(parser)
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -351,4 +384,5 @@ if __name__ == "__main__":
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
-                   seed=args.seed, ewma_alpha=args.ewma_alpha)
+                   seed=args.seed, ewma_alpha=args.ewma_alpha,
+                   telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)))

@@ -30,6 +30,8 @@ from .agents.ewma import EWMALatencyAgent
 from .agents.utility import GreedyUtilityAgent
 
 from .agents.uniform_random import UniformRandomAgent
+from .agents.expected_sarsa import ExpectedSarsaAgent
+from .learning_agents import LEARNING_AGENTS, checkpoint_suffix, save_learner, load_learner
 
 HEURISTIC_AGENTS = ("ewma", "greedy_utility", "random")
 
@@ -40,13 +42,15 @@ HEURISTIC_AGENTS = ("ewma", "greedy_utility", "random")
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
                    mode='online', checkpoint=None, trace=None,
                    split='diagnostic', manifest_path=None, scenario_id=None, seed=None,
-                   ewma_alpha=0.3, telemetry_cfg=None):
+                   ewma_alpha=0.3, telemetry_cfg=None, sarsa_alpha=.01):
     """
-    agent_type: 'dqn', 'random', 'ewma' or 'greedy_utility'
+    agent_type: 'dqn', 'expected_sarsa', 'random', 'ewma' or 'greedy_utility'
     """
     # Preserve the old diagnostic CLI; formal baselines must use heuristic mode.
     if agent_type == "random" and mode == "online" and split == "diagnostic":
         mode = "heuristic"
+    if agent_type not in (*LEARNING_AGENTS, *HEURISTIC_AGENTS):
+        raise ValueError("Unknown agent type")
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
     scenario = None
@@ -56,8 +60,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     if mode == "heuristic" and agent_type not in HEURISTIC_AGENTS:
         raise ValueError("Heuristic mode requires a non-learning comparator")
     if split != "diagnostic":
-        if not trace or (agent_type == "dqn" and not checkpoint) or agent_type not in ("dqn", *HEURISTIC_AGENTS):
-            raise ValueError("Formal runs require a trace and DQN checkpoint or non-learning comparator")
+        if not trace or (agent_type in LEARNING_AGENTS and not checkpoint):
+            raise ValueError("Formal runs require a trace and learner checkpoint or non-learning comparator")
         if exp is not None or episodes is not None:
             raise ValueError("Formal runs use the manifest schedule; overrides are forbidden")
         scenario = protocol["scenario"]
@@ -80,15 +84,13 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     network_scenario = runtime_scenario(scenario, exp, episode_count)
     if mode not in ("online", "frozen", "heuristic"):
         raise ValueError("Unknown experiment mode")
-    if mode == "frozen" and (agent_type != "dqn" or not checkpoint or not trace):
-        raise ValueError("Frozen evaluation requires DQN, --checkpoint and --trace")
-    if checkpoint and agent_type != "dqn":
-        raise ValueError("Checkpoints are supported only for DQN")
-    if trace and agent_type not in ("dqn", *HEURISTIC_AGENTS):
-        raise ValueError("Policy traces require a supported policy")
+    if mode == "frozen" and (agent_type not in LEARNING_AGENTS or not checkpoint or not trace):
+        raise ValueError("Frozen evaluation requires a learner, --checkpoint and --trace")
+    if checkpoint and agent_type not in LEARNING_AGENTS:
+        raise ValueError("Checkpoints are supported only for learners")
     if mode == "online" and checkpoint:
-        if Path(checkpoint).suffix != ".keras":
-            raise ValueError("Use a .keras checkpoint filename")
+        if Path(checkpoint).suffix != checkpoint_suffix(agent_type):
+            raise ValueError("Use the checkpoint suffix for the selected learner")
         if Path(checkpoint).exists() or metadata_path(checkpoint).exists():
             raise FileExistsError(str(checkpoint))
     print(f"[INFO] Packet-loss thresholds: LTE={rl_cfg.lte_loss_threshold_pct}%, "
@@ -124,6 +126,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         print(f"[INFO] Using DQN agent {rl_cfg.dqn_version}; hidden={agent.hidden_units}; "
               f"warm-up={rl_cfg.dqn_replay_warmup}; target interval={rl_cfg.dqn_target_update_steps}; "
               f"global clip norm={rl_cfg.dqn_gradient_clipnorm}")
+    elif agent_type == "expected_sarsa":
+        agent = ExpectedSarsaAgent(rl_cfg, seed=seed, alpha=sarsa_alpha)
+        print(f"[INFO] Linear Expected SARSA, alpha={agent.alpha}, no replay")
     elif agent_type == 'random':
         agent = UniformRandomAgent(seed=seed, action_size=2)
         print("[INFO] Using Random agent (no learning)")
@@ -139,13 +144,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     initial_weights = None
     training_meta = None
     if mode == "frozen":
-        training_meta = load_frozen(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed,
-                                    measurement_settings=telemetry_cfg.measurement_settings())
+        training_meta = load_learner(agent_type, agent, rl_cfg, checkpoint, protocol, seed,
+                                     telemetry_cfg.measurement_settings())
         initial_weights = weights_digest(agent)
     environment = runtime_environment()
     if trace:
         append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
-                            "initial_weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
+                            "initial_weights_sha256": weights_digest(agent) if agent_type in LEARNING_AGENTS else None,
+                            "learner_settings": agent.settings() if agent_type in LEARNING_AGENTS else None,
+                            "learner_initial_training_state": agent.training_state() if agent_type in LEARNING_AGENTS else None,
                             "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
                             "episode_count": episode_count, "protocol": protocol,
                             "agent_type": agent_type, "run_seed": seed,
@@ -257,8 +264,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 phases["rest_metrics_log_s"] = time.monotonic() - phase_start
                 phase_start = time.monotonic()
                 update = None
-                if agent_type == "dqn" and mode == "online":
-                    agent.remember(state, action, r, next_state, done)
+                if agent_type in LEARNING_AGENTS and mode == "online":
+                    agent.remember(state, int(action), r, next_state, done)
                     update = agent.train_step()
                 phases["learning_s"] = time.monotonic() - phase_start
                 elapsed = time.monotonic() - tick_start
@@ -279,7 +286,10 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                         "measurement_windows": latest_measurement["measurement_windows"],
                         "telemetry": latest_measurement, "controller_ack": ack,
                         "decision_acknowledged_s": acknowledged_s,
-                        "dqn_update": update, "dqn_training_state": agent.training_state() if agent_type == "dqn" else None,
+                        "learner_update": update,
+                        "learner_training_state": agent.training_state() if agent_type in LEARNING_AGENTS else None,
+                        "dqn_update": update if agent_type == "dqn" else None,
+                        "dqn_training_state": agent.training_state() if agent_type == "dqn" else None,
                         "terminal_transition": done, "next_state": next_state.tolist(),
                         "controller_reported_choice": chosen, "scenario_conditions": conditions,
                         "background_traffic_counters": traffic_counters,
@@ -298,14 +308,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         checkpoint_elapsed = None
         if mode == "online" and checkpoint:
             phase_start = time.monotonic()
-            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed,
-                            measurement_settings=telemetry_cfg.measurement_settings())
+            save_learner(agent_type, agent, rl_cfg, checkpoint, protocol, seed,
+                         telemetry_cfg.measurement_settings())
             checkpoint_elapsed = time.monotonic() - phase_start
         if trace:
             append_trace(trace, {"kind": "complete",
-                                 "weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
-                                 "epsilon": agent.eps if agent_type == "dqn" else 0.0,
-                                 "replay_size": len(agent.memory) if agent_type == "dqn" else 0,
+                                 "weights_sha256": weights_digest(agent) if agent_type in LEARNING_AGENTS else None,
+                                 "epsilon": agent.eps if agent_type in LEARNING_AGENTS else 0.0,
+                                 "replay_size": len(agent.memory) if agent_type in LEARNING_AGENTS else 0,
+                                 "learner_final_training_state": agent.training_state() if agent_type in LEARNING_AGENTS else None,
                                  "dqn_final_training_state": agent.training_state() if agent_type == "dqn" else None,
                                  "last_trace_write_s": last_trace_write_s,
                                  "checkpoint_elapsed_s": checkpoint_elapsed,
@@ -334,7 +345,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SD-WAN RL emulation")
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"],
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "expected_sarsa", "random", "ewma", "greedy_utility"],
                         help="Type of agent to use (dqn or random)")
     parser.add_argument("--episodes", type=int, default=None,
                         help="Override number of episodes (uses ExperimentConfig otherwise)")
@@ -373,6 +384,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     parser.add_argument("--ewma-alpha", type=float, default=0.3,
                         help="Weight on the newest RTT sample for EWMA")
+    parser.add_argument("--sarsa-alpha", type=float, default=.01)
     add_reward_arguments(parser)
     add_dqn_arguments(parser)
     add_telemetry_arguments(parser)
@@ -395,4 +407,4 @@ if __name__ == "__main__":
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
                    seed=args.seed, ewma_alpha=args.ewma_alpha,
-                   telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)))
+                   telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)), sarsa_alpha=args.sarsa_alpha)

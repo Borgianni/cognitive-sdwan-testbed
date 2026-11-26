@@ -48,8 +48,8 @@ def audit_trace(path):
         raise ValueError("Incomplete trace")
     header, end = rows[0], rows[-1]
     agent = header.get("agent_type")
-    mode = "frozen" if agent == "dqn" else "heuristic"
-    if agent not in ("dqn", "ewma", "greedy_utility", "random") or header.get("mode") != mode:
+    mode = "frozen" if agent in ("dqn","expected_sarsa") else "heuristic"
+    if agent not in ("dqn", "expected_sarsa", "ewma", "greedy_utility", "random") or header.get("mode") != mode:
         raise ValueError("Unsupported evaluation policy or mode")
     seed = header.get("run_seed")
     validate_run_seed(seed, required=True)
@@ -65,7 +65,7 @@ def audit_trace(path):
         raise ValueError("Trace does not match declared tick budget")
     initial = header.get("initial_weights_sha256")
     final = end.get("weights_sha256")
-    if agent == "dqn":
+    if agent in ("dqn","expected_sarsa"):
         validate_training_provenance(header.get("training_protocol"), protocol)
         if (type(header.get("training_seed")) is not int or header["training_seed"] != seed
                 or not isinstance(initial, str) or len(initial) != 64 or initial != final):
@@ -123,7 +123,7 @@ def audit_trace(path):
                 raise ValueError("Missing acknowledged routing action")
             if row["decision_acknowledged_s"] > row["telemetry"]["window_start_s"]:
                 raise ValueError("Measurement started before the routing decision was acknowledged")
-        if agent == "dqn":
+        if agent in ("dqn","expected_sarsa"):
             q = row.get("q_values")
             if (not isinstance(q, list) or len(q) != 2 or not all(finite(v) for v in q)
                     or action != (0 if q[0] >= q[1] else 1)
@@ -146,6 +146,7 @@ def audit_trace(path):
     return {"path": str(path), "agent": agent, "seed": seed,
             "scenario_id": protocol["scenario_id"], "manifest_sha256": protocol["manifest_sha256"],
             "rl_config": header["rl_config"], "heuristic_config": heuristic_config,
+            "learner_settings": header.get("learner_settings"),
             "telemetry_config": header.get("telemetry_config"),
             "test_scenario_ids": sorted(r["id"] for r in protocol["manifest"]["scenarios"]
                                         if r["split"] == "held_out_test"),

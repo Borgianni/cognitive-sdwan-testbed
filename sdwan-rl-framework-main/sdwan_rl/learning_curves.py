@@ -24,7 +24,7 @@ def stats(values):
     return describe(values)
 
 
-def read_run(path, split):
+def read_run(path, split, agent_type="dqn"):
     """Accept only complete, seeded, formal DQN traces with every expected tick."""
     if split not in ("train", "held_out_test"):
         raise ValueError("Use train or held_out_test traces")
@@ -34,7 +34,7 @@ def read_run(path, split):
         raise ValueError(f"{path}: incomplete trace")
     header, end = rows[0], rows[-1]
     mode = "online" if split == "train" else "frozen"
-    if header.get("mode") != mode or header.get("agent_type") != "dqn":
+    if agent_type not in ("dqn","expected_sarsa") or header.get("mode") != mode or header.get("agent_type") != agent_type:
         raise ValueError(f"{path}: incorrect mode or agent")
     seed = header.get("run_seed")
     validate_run_seed(seed, required=True)
@@ -87,6 +87,7 @@ def read_run(path, split):
                           "mean_reward": fmean(rewards), "mean_epsilon": fmean(epsilons),
                           "exploration_fraction": fmean(exploration)})
     return {"path": str(path), "seed": seed, "protocol": protocol,
+            "agent": agent_type, "learner_settings": header.get("learner_settings"),
             "rl_config": header["rl_config"], "telemetry_config": header.get("telemetry_config"),
             "initial_weights_sha256": initial,
             "final_weights_sha256": final, "training_protocol": header.get("training_protocol"),

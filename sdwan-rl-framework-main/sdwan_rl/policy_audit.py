@@ -16,7 +16,8 @@ from .experiment_protocol import validate_training_provenance
 
 def weights_digest(agent):
     digest = hashlib.sha256()
-    for weight in agent.model.get_weights():
+    arrays = agent.parameter_arrays() if hasattr(agent, "parameter_arrays") else agent.model.get_weights()
+    for weight in arrays:
         arr = np.ascontiguousarray(weight)
         digest.update(str(arr.shape).encode())
         digest.update(arr.dtype.str.encode())

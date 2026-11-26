@@ -8,7 +8,7 @@ from sdwan_rl.telemetry_cli import add_telemetry_arguments, telemetry_kwargs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"],
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "expected_sarsa", "random", "ewma", "greedy_utility"],
                         help="Random is a uniform stochastic reference, not a performance bound")
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--cli", action="store_true")
@@ -46,6 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     parser.add_argument("--ewma-alpha", type=float, default=0.3,
                         help="Weight on the newest RTT sample for EWMA")
+    parser.add_argument("--sarsa-alpha", type=float, default=.01)
     add_reward_arguments(parser)
     add_dqn_arguments(parser)
     add_telemetry_arguments(parser)
@@ -68,5 +69,5 @@ if __name__ == "__main__":
         split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
         seed=args.seed, ewma_alpha=args.ewma_alpha,
         telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)),
-        start_cli=args.cli
+        start_cli=args.cli, sarsa_alpha=args.sarsa_alpha
     )

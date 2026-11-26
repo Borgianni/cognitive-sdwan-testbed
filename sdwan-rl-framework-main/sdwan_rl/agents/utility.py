@@ -1,8 +1,8 @@
 """Single source of immediate utility for the greedy baseline and snapshot audits."""
 import math
 
-from .config import RLConfig
-from .env import SDWANEnv
+from ..config import RLConfig
+from ..env import SDWANEnv
 
 TUNNELS = ("lte", "satellite")
 

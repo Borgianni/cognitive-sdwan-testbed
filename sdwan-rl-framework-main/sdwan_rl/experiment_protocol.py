@@ -3,6 +3,8 @@ import argparse
 import hashlib
 import json
 
+from .scenario_profiles import normalize_v2, novelty_report
+
 SPLITS = ("train", "calibration", "held_out_test")
 SCENARIO_FIELDS = {"id", "split", "episodes", "ticks_per_episode", "degrade_lte_ranges"}
 
@@ -13,6 +15,8 @@ def digest(value):
 
 
 def normalize_scenario(row):
+    if isinstance(row, dict) and "events" in row:
+        return normalize_v2(row)
     if not isinstance(row, dict) or set(row) != SCENARIO_FIELDS:
         raise ValueError("Invalid scenario fields")
     if not isinstance(row["id"], str) or not row["id"].strip() or row["split"] not in SPLITS:
@@ -46,17 +50,19 @@ def scenario_digest(row):
 
 def normalize_manifest(manifest):
     if (not isinstance(manifest, dict) or set(manifest) != {"schema_version", "scenarios"}
-            or type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1
+            or type(manifest["schema_version"]) is not int or manifest["schema_version"] not in (1, 2)
             or not isinstance(manifest["scenarios"], list)):
-        raise ValueError("Expected scenario manifest schema version 1")
+        raise ValueError("Expected scenario manifest schema version 1 or 2")
     rows = [normalize_scenario(row) for row in manifest["scenarios"]]
+    if any(("events" in row) != (manifest["schema_version"] == 2) for row in rows):
+        raise ValueError("Scenario fields must match manifest schema version")
     if {row["split"] for row in rows} != set(SPLITS):
         raise ValueError("Manifest must contain train, calibration and held_out_test scenarios")
     if len({row["id"] for row in rows}) != len(rows):
         raise ValueError("Duplicate scenario id")
     if len({scenario_digest(row) for row in rows}) != len(rows):
         raise ValueError("Duplicate effective scenario schedule, including across splits")
-    return {"schema_version": 1, "scenarios": sorted(rows, key=lambda row: row["id"])}
+    return {"schema_version": manifest["schema_version"], "scenarios": sorted(rows, key=lambda row: row["id"])}
 
 
 def read_manifest(path):
@@ -107,9 +113,12 @@ def main():
     parser.add_argument("--manifest", required=True)
     args = parser.parse_args()
     manifest = read_manifest(args.manifest)
-    print(json.dumps({"manifest_sha256": digest(manifest), "scenarios": [
+    result = {"manifest_sha256": digest(manifest), "scenarios": [
         {"id": row["id"], "split": row["split"], "scenario_sha256": scenario_digest(row)}
-        for row in manifest["scenarios"]]}, indent=2))
+        for row in manifest["scenarios"]]}
+    if manifest["schema_version"] == 2:
+        result["novelty"] = novelty_report(manifest["scenarios"])
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

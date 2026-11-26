@@ -1,0 +1,159 @@
+{
+  "schema_version": 2,
+  "scenarios": [
+    {
+      "id": "train_reference",
+      "split": "train",
+      "episodes": 60,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 10,
+          "end_episode": 19,
+          "delay_ms": 100,
+          "loss_pct": 10
+        },
+        {
+          "tunnel": "lte",
+          "start_episode": 35,
+          "end_episode": 45,
+          "delay_ms": 150,
+          "loss_pct": 20
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 20,
+        "satellite": 0
+      }
+    },
+    {
+      "id": "cal_reference",
+      "split": "calibration",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 4,
+          "end_episode": 8,
+          "delay_ms": 125,
+          "loss_pct": 15
+        },
+        {
+          "tunnel": "satellite",
+          "start_episode": 12,
+          "end_episode": 16,
+          "delay_ms": 180,
+          "loss_pct": 12
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 20,
+        "satellite": 20
+      }
+    },
+    {
+      "id": "test_intermediate",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 6,
+          "end_episode": 12,
+          "delay_ms": 130,
+          "loss_pct": 16
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 20,
+        "satellite": 0
+      }
+    },
+    {
+      "id": "test_severe",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 8,
+          "end_episode": 14,
+          "delay_ms": 220,
+          "loss_pct": 30
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 20,
+        "satellite": 0
+      }
+    },
+    {
+      "id": "test_leo",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "satellite",
+          "start_episode": 7,
+          "end_episode": 13,
+          "delay_ms": 250,
+          "loss_pct": 25
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 20,
+        "satellite": 0
+      }
+    },
+    {
+      "id": "test_concurrent",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 6,
+          "end_episode": 13,
+          "delay_ms": 150,
+          "loss_pct": 20
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 210,
+        "satellite": 0
+      }
+    },
+    {
+      "id": "test_joint",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 5,
+          "end_episode": 12,
+          "delay_ms": 220,
+          "loss_pct": 30
+        },
+        {
+          "tunnel": "satellite",
+          "start_episode": 8,
+          "end_episode": 15,
+          "delay_ms": 250,
+          "loss_pct": 25
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 40,
+        "satellite": 100
+      }
+    }
+  ]
+}

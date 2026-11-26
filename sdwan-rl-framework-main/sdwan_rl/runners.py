@@ -12,6 +12,8 @@ from pathlib import Path
 
 from .policy_audit import append_trace, load_frozen, save_checkpoint, weights_digest, metadata_path
 from .experiment_protocol import read_manifest, resolve_run
+from .scenario_runtime import ScenarioRuntime
+from .scenario_profiles import nominal_profiles
 
 from .topology import SDWANTopo
 from .metrics import measure_link_tuple
@@ -71,6 +73,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     """
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
+    scenario = None
     if split != "diagnostic":
         if agent_type != "dqn" or not checkpoint or not trace:
             raise ValueError("Formal runs require DQN, checkpoint and trace")
@@ -79,12 +82,18 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         scenario = protocol["scenario"]
         exp = ExperimentConfig(episodes=scenario["episodes"],
                                ticks_per_episode=scenario["ticks_per_episode"],
-                               degrade_lte_ranges=tuple(map(tuple, scenario["degrade_lte_ranges"])))
+                               degrade_lte_ranges=tuple(map(tuple, scenario.get("degrade_lte_ranges", []))))
     else:
         exp = exp if exp is not None else ExperimentConfig()
     print(f"[INFO] Protocol split: {split}; scenario: {scenario_id or 'diagnostic'}")
     rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
     episode_count = exp.episodes if episodes is None else episodes
+    use_v2 = scenario is not None and "events" in scenario
+    if use_v2:
+        nominal = nominal_profiles()
+        if (rl_cfg.lte_capacity_mbps != nominal["lte"]["capacity_mbps"]
+                or rl_cfg.sat_capacity_mbps != nominal["satellite"]["capacity_mbps"]):
+            raise ValueError("RL capacities must match the v2 topology")
     if mode not in ("online", "frozen"):
         raise ValueError("Unknown experiment mode")
     if mode == "frozen" and (agent_type != "dqn" or not checkpoint or not trace):
@@ -135,10 +144,19 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     api = ControllerAPI()
 
+    runtime = None
     try:
         net.start()
+        if use_v2:
+            runtime = ScenarioRuntime(net, scenario)
         for ep in range(1, episode_count + 1):
-            set_degradation(net, ep, exp.degrade_lte_ranges)
+            conditions = None
+            if runtime is not None:
+                conditions = runtime.apply_episode(ep)
+                if ep == 1:
+                    runtime.start_traffic()
+            else:
+                set_degradation(net, ep, exp.degrade_lte_ranges)
             env.reset_metrics()
             state = env.make_state().vec
             decision_metrics = None
@@ -154,6 +172,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 # 2) Measure both links
                 lte_d, lte_thr, lte_loss = measure_link_tuple(net, "lte")
                 sat_d, sat_thr, sat_loss = measure_link_tuple(net, "satellite")
+                traffic_counters = runtime.check_traffic() if runtime is not None else None
 
                 metrics = {
                     "lte": {"delay": lte_d, "throughput": lte_thr, "packet_loss": lte_loss},
@@ -184,6 +203,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                         "measurement_metrics": metrics, "reward": r,
                         "next_state": next_state.tolist(),
                         "controller_reported_choice": chosen,
+                        "scenario_conditions": conditions,
+                        "background_traffic_counters": traffic_counters,
                     })
                 if agent_type == 'dqn' and mode == "online":
                     agent.remember(state, action, r, next_state, done)
@@ -211,8 +232,12 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             CLI(net)
 
     finally:
-        net.stop()
-        cleanup()
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            net.stop()
+            cleanup()
 
 
 # ----------------------------------------------------------------------

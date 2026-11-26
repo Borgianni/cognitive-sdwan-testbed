@@ -71,7 +71,7 @@ def read_manifest(path):
 
 
 def resolve_run(manifest, scenario_id, split, mode):
-    if mode not in ("online", "frozen"):
+    if mode not in ("online", "frozen", "heuristic"):
         raise ValueError("Unknown experiment mode")
     if split == "diagnostic":
         if manifest is not None or scenario_id is not None:
@@ -79,8 +79,8 @@ def resolve_run(manifest, scenario_id, split, mode):
         return {"split": "diagnostic"}
     if split not in SPLITS or manifest is None or not scenario_id:
         raise ValueError("Formal runs require a manifest, scenario id and split")
-    if (split == "train" and mode != "online") or (split != "train" and mode != "frozen"):
-        raise ValueError("Training must be online; calibration and test must be frozen")
+    if (split == "train" and mode != "online") or (split != "train" and mode not in ("frozen", "heuristic")):
+        raise ValueError("Training must be online; calibration/test use frozen or non-learning heuristic mode")
     manifest = normalize_manifest(manifest)
     scenario = next((row for row in manifest["scenarios"] if row["id"] == scenario_id), None)
     if scenario is None or scenario["split"] != split:

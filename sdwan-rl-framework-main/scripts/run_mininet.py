@@ -4,7 +4,7 @@ from sdwan_rl.config import RLConfig
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random"])
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma"])
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--cli", action="store_true")
     parser.add_argument("--lte-loss-threshold-pct", type=float, default=10.0,
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--sat-residual-threshold", type=float,
                         default=RLConfig.sat_residual_threshold,
                         help="Minimum LEO residual capacity fraction (0, 1]")
-    parser.add_argument("--mode", choices=["online", "frozen"], default="online")
+    parser.add_argument("--mode", choices=["online", "frozen", "heuristic"], default="online")
     parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
     parser.add_argument("--trace", help="New JSONL policy trace file")
     parser.add_argument("--state-representation", choices=["binary", "continuous"],
@@ -39,6 +39,8 @@ if __name__ == "__main__":
     parser.add_argument("--manifest", help="Formal scenario manifest JSON")
     parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
+    parser.add_argument("--ewma-alpha", type=float, default=0.3,
+                        help="Weight on the newest RTT sample for EWMA")
     args = parser.parse_args()
     
     run_experiment(
@@ -55,6 +57,6 @@ if __name__ == "__main__":
                         continuous_delay_scale_ms=args.continuous_delay_scale_ms),
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
-        seed=args.seed,
+        seed=args.seed, ewma_alpha=args.ewma_alpha,
         start_cli=args.cli
     )

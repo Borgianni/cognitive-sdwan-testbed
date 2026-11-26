@@ -20,7 +20,7 @@ from .metrics import measure_link_tuple
 from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
-from .agents.dqn import DQNAgent
+from .agents.ewma import EWMALatencyAgent
 
 
 # ----------------------------------------------------------------------
@@ -67,17 +67,22 @@ def set_degradation(net, episode: int, ranges: Tuple[Tuple[int, int], ...]):
 # ----------------------------------------------------------------------
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
                    mode='online', checkpoint=None, trace=None,
-                   split='diagnostic', manifest_path=None, scenario_id=None, seed=None):
+                   split='diagnostic', manifest_path=None, scenario_id=None, seed=None,
+                   ewma_alpha=0.3):
     """
-    agent_type: 'dqn' or 'random'
+    agent_type: 'dqn', 'random' or 'ewma'
     """
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
     scenario = None
     validate_run_seed(seed, required=split != "diagnostic")
+    if agent_type == "ewma" and mode != "heuristic":
+        raise ValueError("EWMA requires --mode heuristic")
+    if mode == "heuristic" and agent_type != "ewma":
+        raise ValueError("Heuristic mode currently supports EWMA")
     if split != "diagnostic":
-        if agent_type != "dqn" or not checkpoint or not trace:
-            raise ValueError("Formal runs require DQN, checkpoint and trace")
+        if not trace or (agent_type == "dqn" and not checkpoint) or agent_type not in ("dqn", "ewma"):
+            raise ValueError("Formal runs require a trace and DQN checkpoint or non-learning EWMA")
         if exp is not None or episodes is not None:
             raise ValueError("Formal runs use the manifest schedule; overrides are forbidden")
         scenario = protocol["scenario"]
@@ -95,14 +100,14 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         if (rl_cfg.lte_capacity_mbps != nominal["lte"]["capacity_mbps"]
                 or rl_cfg.sat_capacity_mbps != nominal["satellite"]["capacity_mbps"]):
             raise ValueError("RL capacities must match the v2 topology")
-    if mode not in ("online", "frozen"):
+    if mode not in ("online", "frozen", "heuristic"):
         raise ValueError("Unknown experiment mode")
     if mode == "frozen" and (agent_type != "dqn" or not checkpoint or not trace):
         raise ValueError("Frozen evaluation requires DQN, --checkpoint and --trace")
     if checkpoint and agent_type != "dqn":
         raise ValueError("Checkpoints are supported only for DQN")
-    if trace and agent_type != "dqn":
-        raise ValueError("Policy traces are supported only for DQN")
+    if trace and agent_type not in ("dqn", "ewma"):
+        raise ValueError("Policy traces are supported for DQN and EWMA")
     if mode == "online" and checkpoint:
         if Path(checkpoint).suffix != ".keras":
             raise ValueError("Use a .keras checkpoint filename")
@@ -130,6 +135,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
 
     # --- Agent instantiation ---
     if agent_type == 'dqn':
+        from .agents.dqn import DQNAgent
         agent = DQNAgent(state_size=6, action_size=2,
                          lr=rl_cfg.lr, gamma=rl_cfg.gamma,
                          replay_size=rl_cfg.replay_size, batch_size=rl_cfg.batch_size,
@@ -138,8 +144,11 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     elif agent_type == 'random':
         agent = RandomAgent(action_size=2)
         print("[INFO] Using Random agent (no learning)")
+    elif agent_type == "ewma":
+        agent = EWMALatencyAgent(ewma_alpha)
+        print(f"[INFO] Using latency-only EWMA (alpha={agent.alpha})")
     else:
-        raise ValueError(f"Unknown agent_type: {agent_type} (use 'dqn' or 'random')")
+        raise ValueError(f"Unknown agent_type: {agent_type}")
 
     initial_weights = None
     training_meta = None
@@ -148,10 +157,12 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         initial_weights = weights_digest(agent)
     if trace:
         append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
-                            "initial_weights_sha256": weights_digest(agent),
+                            "initial_weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
                             "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
                             "episode_count": episode_count, "protocol": protocol,
                             "agent_type": agent_type, "run_seed": seed,
+                            "heuristic_config": {"alpha": agent.alpha, "reset_each_episode": True}
+                            if agent_type == "ewma" else None,
                             "training_protocol": training_meta.get("training_protocol") if training_meta else None,
                             "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
     topo = SDWANTopo()
@@ -174,12 +185,20 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             env.reset_metrics()
             state = env.make_state().vec
             decision_metrics = None
+            if agent_type == "ewma":
+                agent.reset()
 
             for t in range(exp.ticks_per_episode):
                 # 1) Agent selects action
-                if trace:
+                heuristic_details = None
+                if agent_type == "ewma":
+                    action, heuristic_details = agent.decide(decision_metrics)
+                    eps_before, q_values, exploratory = 0.0, None, False
+                    greedy_action = None  # no Q-function
+                elif trace:
                     eps_before = agent.eps
                     action, q_values, exploratory = agent.traced_action(state)
+                    greedy_action = int(q_values.argmax())
                 else:
                     action = agent.act(state)  # 0 = LTE, 1 = Satellite
 
@@ -211,8 +230,10 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                     append_trace(trace, {
                         "kind": "decision", "episode": ep, "tick": t,
                         "decision_metrics": decision_metrics,
-                        "state": state.tolist(), "q_values": q_values.tolist(),
-                        "greedy_action": int(q_values.argmax()), "action": int(action),
+                        "state": state.tolist(),
+                        "q_values": q_values.tolist() if q_values is not None else None,
+                        "greedy_action": greedy_action, "action": int(action),
+                        "heuristic_details": heuristic_details,
                         "exploratory": bool(exploratory), "epsilon": eps_before,
                         "measurement_metrics": metrics, "reward": r,
                         "next_state": next_state.tolist(),
@@ -239,8 +260,10 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         if mode == "online" and checkpoint:
             save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
         if trace:
-            append_trace(trace, {"kind": "complete", "weights_sha256": weights_digest(agent),
-                                 "epsilon": agent.eps, "replay_size": len(agent.memory)})
+            append_trace(trace, {"kind": "complete",
+                                 "weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
+                                 "epsilon": agent.eps if agent_type == "dqn" else 0.0,
+                                 "replay_size": len(agent.memory) if agent_type == "dqn" else 0})
         if start_cli:
             print("Entering Mininet CLI (type 'exit' to quit)...")
             CLI(net)
@@ -259,7 +282,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SD-WAN RL emulation")
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random"],
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma"],
                         help="Type of agent to use (dqn or random)")
     parser.add_argument("--episodes", type=int, default=None,
                         help="Override number of episodes (uses ExperimentConfig otherwise)")
@@ -283,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--sat-residual-threshold", type=float,
                         default=RLConfig.sat_residual_threshold,
                         help="Minimum LEO residual capacity fraction (0, 1]")
-    parser.add_argument("--mode", choices=["online", "frozen"], default="online")
+    parser.add_argument("--mode", choices=["online", "frozen", "heuristic"], default="online")
     parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
     parser.add_argument("--trace", help="New JSONL policy trace file")
     parser.add_argument("--state-representation", choices=["binary", "continuous"],
@@ -296,6 +319,8 @@ if __name__ == "__main__":
     parser.add_argument("--manifest", help="Formal scenario manifest JSON")
     parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
+    parser.add_argument("--ewma-alpha", type=float, default=0.3,
+                        help="Weight on the newest RTT sample for EWMA")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -313,4 +338,4 @@ if __name__ == "__main__":
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
-                   seed=args.seed)
+                   seed=args.seed, ewma_alpha=args.ewma_alpha)

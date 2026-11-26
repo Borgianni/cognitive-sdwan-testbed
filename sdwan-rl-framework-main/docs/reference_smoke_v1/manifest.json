@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "scenarios": [
+    {
+      "id": "smoke_train",
+      "split": "train",
+      "episodes": 3,
+      "ticks_per_episode": 3,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 2,
+          "end_episode": 2,
+          "delay_ms": 90,
+          "loss_pct": 8
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 3,
+        "satellite": 4
+      }
+    },
+    {
+      "id": "smoke_cal",
+      "split": "calibration",
+      "episodes": 3,
+      "ticks_per_episode": 2,
+      "events": [
+        {
+          "tunnel": "lte",
+          "start_episode": 2,
+          "end_episode": 2,
+          "delay_ms": 60,
+          "loss_pct": 5
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 3,
+        "satellite": 4
+      }
+    },
+    {
+      "id": "smoke_test",
+      "split": "held_out_test",
+      "episodes": 3,
+      "ticks_per_episode": 2,
+      "events": [
+        {
+          "tunnel": "satellite",
+          "start_episode": 2,
+          "end_episode": 2,
+          "delay_ms": 100,
+          "loss_pct": 8
+        }
+      ],
+      "traffic_mbps": {
+        "lte": 4,
+        "satellite": 3
+      }
+    }
+  ]
+}

@@ -6,7 +6,7 @@ The framework integrates:
 
 * **Mininet** for packet-level network emulation
 * **Ryu SDN Controller** for telemetry collection and OpenFlow rule enforcement
-* **Reinforcement Learning agents** (DQN, Random, EWMA baseline)
+* **Learning agents** (DQN, linear Expected SARSA) and non-learning comparators
 
 It implements a continuous **Perception → Learning → Decision → Action** control loop, enabling rigorous benchmarking of AI-driven traffic engineering and tunnel selection under dynamic network conditions.
 
@@ -16,7 +16,7 @@ It implements a continuous **Perception → Learning → Decision → Action** c
 
 * Reproducible experiments through centralized configuration
 * Periodic measurement-driven closed-loop overlay control (integration validation pending)
-* Modular agent architecture (DQN, uniform Random, EWMA, Greedy Utility)
+* Modular agent architecture (DQN, Expected SARSA, uniform Random, EWMA, Greedy Utility)
 * Configurable link degradation profiles
 * Automatic logging of network and learning metrics
 * LTE + LEO satellite dual-tunnel scenario
@@ -52,7 +52,7 @@ It implements a continuous **Perception → Learning → Decision → Action** c
 +--------------------+
 ```
 
-The agent continuously observes network conditions, selects the most suitable tunnel, and updates forwarding policies through the SDN controller.
+The agent periodically observes measured network conditions, selects a candidate path, and requests forwarding updates through the SDN controller. Optimality and production timing are not assumed.
 
 ---
 
@@ -150,6 +150,21 @@ pip install ryu
 ```
 
 ---
+
+## Before running experiments (revision branch)
+
+Run the read-only inventory first:
+```bash
+python3 scripts/preflight.py --imports > preflight.json
+```
+No root or Mininet startup is performed. The working dependency versions
+and isolated Linux environment must be validated before the final campaign.
+See [reference smoke procedure](docs/reference_smoke_v1/README.md).
+The smoke manifest and configs are diagnostics only, not reference
+scientific results. Both main runner CLIs accept complete `--rl-config`
+and `--telemetry-config` JSON files; mixing configuration flags is rejected.
+See [C38-C42 scope and reproducibility notes](docs/revision-r1-c38-c42.md)
+and [C39 comparison protocol](docs/revision-r1-c39-comparison.md).
 
 ## Running Experiments
 

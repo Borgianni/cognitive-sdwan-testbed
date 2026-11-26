@@ -5,6 +5,7 @@ from sdwan_rl.reward_cli import add_reward_arguments, reward_kwargs
 from sdwan_rl.dqn_settings import add_dqn_arguments, dqn_kwargs
 from sdwan_rl.telemetry_core import TelemetryConfig
 from sdwan_rl.telemetry_cli import add_telemetry_arguments, telemetry_kwargs
+from sdwan_rl.config_files import add_config_files, resolve_configs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -50,12 +51,10 @@ if __name__ == "__main__":
     add_reward_arguments(parser)
     add_dqn_arguments(parser)
     add_telemetry_arguments(parser)
+    add_config_files(parser)
     args = parser.parse_args()
     
-    run_experiment(
-        agent_type=args.agent_type,
-        episodes=args.episodes,
-        rl_cfg=RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
+    rl_cfg = RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
                         sat_loss_threshold_pct=args.sat_loss_threshold_pct,
                         lte_delay_threshold_ms=args.lte_delay_threshold_ms,
                         sat_delay_threshold_ms=args.sat_delay_threshold_ms,
@@ -64,10 +63,15 @@ if __name__ == "__main__":
                         sat_residual_threshold=args.sat_residual_threshold,
                         state_representation=args.state_representation,
                         continuous_delay_scale_ms=args.continuous_delay_scale_ms,
-                        **reward_kwargs(args), **dqn_kwargs(args)),
+                        **reward_kwargs(args), **dqn_kwargs(args))
+    rl_cfg, telemetry_cfg = resolve_configs(parser,args,rl_cfg,TelemetryConfig(**telemetry_kwargs(args)))
+    run_experiment(
+        agent_type=args.agent_type,
+        episodes=args.episodes,
+        rl_cfg=rl_cfg,
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
         seed=args.seed, ewma_alpha=args.ewma_alpha,
-        telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)),
+        telemetry_cfg=telemetry_cfg,
         start_cli=args.cli, sarsa_alpha=args.sarsa_alpha
     )

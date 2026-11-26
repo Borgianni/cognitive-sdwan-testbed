@@ -1,0 +1,10 @@
+{
+  "window_s": 2,
+  "grace_s": 1.5,
+  "probe_packets": 100,
+  "probe_payload_bytes": 128,
+  "primary_packets": 500,
+  "primary_payload_bytes": 512,
+  "observation_lag_ticks": 0,
+  "carry_observations_across_episodes": false
+}

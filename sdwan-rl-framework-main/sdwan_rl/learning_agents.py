@@ -23,7 +23,7 @@ def save_learner(kind,agent,cfg,path,protocol,seed,measurement_settings):
                                measurement_settings=measurement_settings)
     validate_run_seed(seed,required=protocol["split"]=="train")
     path=Path(path)
-    if kind!="expected_sarsa" or path.suffix!=".npz" or path.exists() or metadata_path(path).exists() or agent.frozen or agent.memory:
+    if kind!="expected_sarsa" or path.suffix!=".npz" or path.exists() or metadata_path(path).exists() or agent.frozen or agent.memory or agent.updates <= 0:
         raise ValueError("Use a new Expected SARSA checkpoint after an online update")
     path.parent.mkdir(parents=True,exist_ok=True)
     agent.save(str(path))

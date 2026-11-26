@@ -20,6 +20,7 @@ from .topology import SDWANTopo
 from .telemetry_core import TelemetryConfig, observation_age, observation_index, observation_source
 from .telemetry_cli import add_telemetry_arguments, telemetry_kwargs, runtime_scenario
 from .telemetry_runtime import TelemetryCollector
+from .config_files import add_config_files, resolve_configs
 from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
@@ -388,6 +389,7 @@ if __name__ == "__main__":
     add_reward_arguments(parser)
     add_dqn_arguments(parser)
     add_telemetry_arguments(parser)
+    add_config_files(parser)
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -403,8 +405,9 @@ if __name__ == "__main__":
                       state_representation=args.state_representation,
                       continuous_delay_scale_ms=args.continuous_delay_scale_ms,
                       **reward_kwargs(args), **dqn_kwargs(args))
+    rl_cfg, telemetry_cfg = resolve_configs(parser,args,rl_cfg,TelemetryConfig(**telemetry_kwargs(args)))
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
                    seed=args.seed, ewma_alpha=args.ewma_alpha,
-                   telemetry_cfg=TelemetryConfig(**telemetry_kwargs(args)), sarsa_alpha=args.sarsa_alpha)
+                   telemetry_cfg=telemetry_cfg, sarsa_alpha=args.sarsa_alpha)

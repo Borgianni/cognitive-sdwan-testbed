@@ -8,6 +8,7 @@ from statistics import fmean
 
 from .config import RLConfig
 from .env import SDWANEnv
+from .agents.utility import snapshot_utilities
 
 ACTIONS = ("LTE", "LEO")
 MODES = ("legacy_code", "legacy_paper", "revised_binary", "continuous")
@@ -31,19 +32,9 @@ def encoding_config(cfg, mode):
 
 
 def evaluate_snapshot(metrics, cfg):
-    for tunnel in ("lte", "satellite"):
-        for name in ("delay", "packet_loss", "throughput"):
-            value = metrics[tunnel][name]
-            if not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError(f"Invalid {tunnel} {name}")
-        m = metrics[tunnel]
-        if m["delay"] <= 0 or not 0 <= m["packet_loss"] <= 100 or m["throughput"] < 0:
-            raise ValueError(f"Invalid telemetry for {tunnel}")
+    utilities = snapshot_utilities(metrics, cfg)
     env = SDWANEnv(cfg)
     env.update_from_metrics(metrics)
-    utilities = tuple(env.reward(a) for a in range(2))
-    if not all(math.isfinite(u) for u in utilities):
-        raise ValueError("Non-finite immediate reward")
     return tuple(float(v) for v in env.make_state().vec), utilities
 
 

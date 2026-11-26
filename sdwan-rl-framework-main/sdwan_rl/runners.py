@@ -21,6 +21,9 @@ from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
 from .agents.ewma import EWMALatencyAgent
+from .agents.utility import GreedyUtilityAgent
+
+HEURISTIC_AGENTS = ("ewma", "greedy_utility")
 
 
 # ----------------------------------------------------------------------
@@ -70,19 +73,19 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                    split='diagnostic', manifest_path=None, scenario_id=None, seed=None,
                    ewma_alpha=0.3):
     """
-    agent_type: 'dqn', 'random' or 'ewma'
+    agent_type: 'dqn', 'random', 'ewma' or 'greedy_utility'
     """
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
     scenario = None
     validate_run_seed(seed, required=split != "diagnostic")
-    if agent_type == "ewma" and mode != "heuristic":
-        raise ValueError("EWMA requires --mode heuristic")
-    if mode == "heuristic" and agent_type != "ewma":
-        raise ValueError("Heuristic mode currently supports EWMA")
+    if agent_type in HEURISTIC_AGENTS and mode != "heuristic":
+        raise ValueError("Non-learning comparators require --mode heuristic")
+    if mode == "heuristic" and agent_type not in HEURISTIC_AGENTS:
+        raise ValueError("Heuristic mode requires a non-learning comparator")
     if split != "diagnostic":
-        if not trace or (agent_type == "dqn" and not checkpoint) or agent_type not in ("dqn", "ewma"):
-            raise ValueError("Formal runs require a trace and DQN checkpoint or non-learning EWMA")
+        if not trace or (agent_type == "dqn" and not checkpoint) or agent_type not in ("dqn", *HEURISTIC_AGENTS):
+            raise ValueError("Formal runs require a trace and DQN checkpoint or non-learning comparator")
         if exp is not None or episodes is not None:
             raise ValueError("Formal runs use the manifest schedule; overrides are forbidden")
         scenario = protocol["scenario"]
@@ -106,8 +109,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         raise ValueError("Frozen evaluation requires DQN, --checkpoint and --trace")
     if checkpoint and agent_type != "dqn":
         raise ValueError("Checkpoints are supported only for DQN")
-    if trace and agent_type not in ("dqn", "ewma"):
-        raise ValueError("Policy traces are supported for DQN and EWMA")
+    if trace and agent_type not in ("dqn", *HEURISTIC_AGENTS):
+        raise ValueError("Policy traces require a supported policy")
     if mode == "online" and checkpoint:
         if Path(checkpoint).suffix != ".keras":
             raise ValueError("Use a .keras checkpoint filename")
@@ -147,6 +150,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     elif agent_type == "ewma":
         agent = EWMALatencyAgent(ewma_alpha)
         print(f"[INFO] Using latency-only EWMA (alpha={agent.alpha})")
+    elif agent_type == "greedy_utility":
+        agent = GreedyUtilityAgent(rl_cfg)
+        print("[INFO] Using causal greedy utility comparator")
     else:
         raise ValueError(f"Unknown agent_type: {agent_type}")
 
@@ -162,7 +168,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                             "episode_count": episode_count, "protocol": protocol,
                             "agent_type": agent_type, "run_seed": seed,
                             "heuristic_config": {"alpha": agent.alpha, "reset_each_episode": True}
-                            if agent_type == "ewma" else None,
+                            if agent_type == "ewma" else
+                            {"utility": "shared_env_reward", "reset_each_episode": True}
+                            if agent_type == "greedy_utility" else None,
                             "training_protocol": training_meta.get("training_protocol") if training_meta else None,
                             "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
     topo = SDWANTopo()
@@ -185,13 +193,13 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             env.reset_metrics()
             state = env.make_state().vec
             decision_metrics = None
-            if agent_type == "ewma":
+            if agent_type in HEURISTIC_AGENTS:
                 agent.reset()
 
             for t in range(exp.ticks_per_episode):
                 # 1) Agent selects action
                 heuristic_details = None
-                if agent_type == "ewma":
+                if agent_type in HEURISTIC_AGENTS:
                     action, heuristic_details = agent.decide(decision_metrics)
                     eps_before, q_values, exploratory = 0.0, None, False
                     greedy_action = None  # no Q-function
@@ -282,7 +290,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SD-WAN RL emulation")
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma"],
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"],
                         help="Type of agent to use (dqn or random)")
     parser.add_argument("--episodes", type=int, default=None,
                         help="Override number of episodes (uses ExperimentConfig otherwise)")

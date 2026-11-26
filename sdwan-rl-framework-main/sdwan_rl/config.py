@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass, field
 from typing import Tuple
+from .dqn_settings import CURRENT_DQN, LEGACY_DQN, DQN_FIELDS, validate_settings
 
 @dataclass
 class LinkConfig:
@@ -62,6 +63,13 @@ class RLConfig:
     lte_cost_index: float = 7.0
     sat_cost_index: float = 20.0
 
+    # Versioned implementation; original public 24/24 model had no target network.
+    dqn_version: str = CURRENT_DQN
+    dqn_replay_warmup: int = 32
+    dqn_target_update_steps: int = 100
+    dqn_gradient_clipnorm: float = 10.0
+    dqn_deterministic_ops: bool = False
+
     @classmethod
     def from_record(cls, fields):
         """Old checkpoints/traces predate explicit reward semantics."""
@@ -73,9 +81,16 @@ class RLConfig:
             fields["reward_mode"] = "legacy"
         elif present != reward_fields:
             raise ValueError("Incomplete recorded reward configuration")
+        dqn_present = set(DQN_FIELDS).intersection(fields)
+        if not dqn_present:
+            fields["dqn_version"] = LEGACY_DQN
+            fields["dqn_replay_warmup"] = fields.get("batch_size", cls.batch_size)
+        elif dqn_present != set(DQN_FIELDS):
+            raise ValueError("Incomplete recorded DQN implementation configuration")
         return cls(**fields)
 
     def __post_init__(self):
+        validate_settings(self)
         if self.reward_mode not in ("normalized", "legacy"):
             raise ValueError("Unknown reward mode")
         for name in ("threshold_delay_ms", "reward_bandwidth_ref_mbps",

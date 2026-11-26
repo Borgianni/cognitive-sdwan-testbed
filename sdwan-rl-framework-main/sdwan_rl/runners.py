@@ -21,6 +21,8 @@ from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
 from .reward_cli import add_reward_arguments, reward_kwargs
+from .dqn_settings import LEGACY_DQN, add_dqn_arguments, dqn_kwargs
+from .runtime_environment import runtime_environment
 from .agents.ewma import EWMALatencyAgent
 from .agents.utility import GreedyUtilityAgent
 
@@ -113,23 +115,21 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
           f"cost indices={(rl_cfg.lte_cost_index, rl_cfg.sat_cost_index)}")
     env = SDWANEnv(cfg=rl_cfg)
 
-    # Seed before constructing a fresh agent. Scenario-generation RNG is separate.
-    if seed is not None:
-        if agent_type == "dqn":
-            import tensorflow as tf
-            tf.keras.utils.set_random_seed(seed)
-        else:
-            random.seed(seed)
+    # DQN seeds before model creation and owns separate exploration/replay RNGs.
+    if seed is not None and agent_type != "dqn":
+        random.seed(seed)
     print(f"[INFO] Run seed: {seed}")
+    if agent_type == "dqn" and rl_cfg.dqn_version == LEGACY_DQN:
+        if mode != "frozen" or split != "diagnostic":
+            raise ValueError("Legacy DQN is only supported for frozen diagnostic inference")
 
     # --- Agent instantiation ---
     if agent_type == 'dqn':
         from .agents.dqn import DQNAgent
-        agent = DQNAgent(state_size=6, action_size=2,
-                         lr=rl_cfg.lr, gamma=rl_cfg.gamma,
-                         replay_size=rl_cfg.replay_size, batch_size=rl_cfg.batch_size,
-                         eps_start=rl_cfg.eps_start, eps_end=rl_cfg.eps_end, eps_decay=rl_cfg.eps_decay)
-        print("[INFO] Using DQN agent")
+        agent = DQNAgent.from_config(rl_cfg, state_size=6, action_size=2, seed=seed)
+        print(f"[INFO] Using DQN agent {rl_cfg.dqn_version}; hidden={agent.hidden_units}; "
+              f"warm-up={rl_cfg.dqn_replay_warmup}; target interval={rl_cfg.dqn_target_update_steps}; "
+              f"global clip norm={rl_cfg.dqn_gradient_clipnorm}")
     elif agent_type == 'random':
         agent = UniformRandomAgent(seed=seed, action_size=2)
         print("[INFO] Using Random agent (no learning)")
@@ -147,12 +147,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     if mode == "frozen":
         training_meta = load_frozen(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
         initial_weights = weights_digest(agent)
+    environment = runtime_environment()
     if trace:
         append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
                             "initial_weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
                             "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
                             "episode_count": episode_count, "protocol": protocol,
                             "agent_type": agent_type, "run_seed": seed,
+                            "runtime_environment": environment,
+                            "dqn_initial_training_state": agent.training_state() if agent_type == "dqn" else None,
                             "heuristic_config": {"alpha": agent.alpha, "reset_each_episode": True}
                             if agent_type == "ewma" else
                             {"utility": "shared_env_reward", "reset_each_episode": True}
@@ -227,7 +230,11 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 # 5) Next state
                 next_state = env.make_state().vec
 
-                # 6) Experience replay & training (only for DQN)
+                # 6) One optimizer update per eligible tick, no episode replay reset.
+                update = None
+                if agent_type == "dqn" and mode == "online":
+                    agent.remember(state, action, r, next_state, done)
+                    update = agent.train_step()
                 if trace:
                     append_trace(trace, {
                         "kind": "decision", "episode": ep, "tick": t,
@@ -239,15 +246,14 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                         "exploratory": bool(exploratory), "epsilon": eps_before,
                         "measurement_metrics": metrics, "reward": r,
                         "reward_terms": terms,
+                        "dqn_update": update,
+                        "dqn_training_state": agent.training_state() if agent_type == "dqn" else None,
+                        "terminal_transition": done,
                         "next_state": next_state.tolist(),
                         "controller_reported_choice": chosen,
                         "scenario_conditions": conditions,
                         "background_traffic_counters": traffic_counters,
                     })
-                if agent_type == 'dqn' and mode == "online":
-                    agent.remember(state, action, r, next_state, done)
-                    agent.train_step()
-
                 decision_metrics = metrics
                 state = next_state
 
@@ -266,7 +272,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             append_trace(trace, {"kind": "complete",
                                  "weights_sha256": weights_digest(agent) if agent_type == "dqn" else None,
                                  "epsilon": agent.eps if agent_type == "dqn" else 0.0,
-                                 "replay_size": len(agent.memory) if agent_type == "dqn" else 0})
+                                 "replay_size": len(agent.memory) if agent_type == "dqn" else 0,
+                                 "dqn_final_training_state": agent.training_state() if agent_type == "dqn" else None})
         if start_cli:
             print("Entering Mininet CLI (type 'exit' to quit)...")
             CLI(net)
@@ -325,6 +332,7 @@ if __name__ == "__main__":
     parser.add_argument("--ewma-alpha", type=float, default=0.3,
                         help="Weight on the newest RTT sample for EWMA")
     add_reward_arguments(parser)
+    add_dqn_arguments(parser)
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -339,7 +347,7 @@ if __name__ == "__main__":
                       sat_residual_threshold=args.sat_residual_threshold,
                       state_representation=args.state_representation,
                       continuous_delay_scale_ms=args.continuous_delay_scale_ms,
-                      **reward_kwargs(args))
+                      **reward_kwargs(args), **dqn_kwargs(args))
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,

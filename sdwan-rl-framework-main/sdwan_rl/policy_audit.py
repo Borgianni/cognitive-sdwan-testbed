@@ -9,6 +9,8 @@ import numpy as np
 
 from .config import RLConfig
 from .env import SDWANEnv
+from .dqn_settings import CURRENT_DQN, LEGACY_DQN, training_settings
+from .runtime_environment import runtime_environment
 from .experiment_protocol import validate_training_provenance
 
 
@@ -43,6 +45,8 @@ def validate_run_seed(seed, required=False):
 
 def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None):
     validate_run_seed(run_seed, required=protocol is not None and protocol["split"] == "train")
+    if cfg.dqn_version != CURRENT_DQN or agent.settings() != training_settings(cfg):
+        raise ValueError("Checkpoint training settings differ from declared DQN configuration")
     path = Path(path)
     if path.suffix != ".keras":
         raise ValueError("Use a .keras checkpoint filename")
@@ -52,7 +56,10 @@ def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None):
     agent.save(str(path))
     meta = {"observation_schema": 2, "rl_config": asdict(cfg), "checkpoint_sha256": file_digest(path),
             "weights_sha256": weights_digest(agent),
-            "training_protocol": protocol, "training_seed": run_seed}
+            "training_protocol": protocol, "training_seed": run_seed,
+            "dqn_training_state": agent.training_state(),
+            "runtime_environment": runtime_environment(),
+            "checkpoint_purpose": "frozen_inference_only"}
     with metadata_path(path).open("x", encoding="utf-8") as stream:
         json.dump(meta, stream, indent=2)
 
@@ -85,10 +92,14 @@ def load_frozen(agent, cfg, path, protocol=None, run_seed=None):
     if asdict(saved_cfg) != asdict(cfg):
         raise ValueError("Evaluation configuration differs from training checkpoint")
     if protocol is not None and protocol["split"] != "diagnostic":
+        if cfg.dqn_version != CURRENT_DQN:
+            raise ValueError("Legacy DQN checkpoints are diagnostic-only")
         validate_training_provenance(meta.get("training_protocol"), protocol)
         validate_run_seed(run_seed, required=True)
         if type(meta.get("training_seed")) is not int or meta["training_seed"] != run_seed:
             raise ValueError("Evaluation run seed must match the training checkpoint seed")
+    if agent.settings() != training_settings(cfg):
+        raise ValueError("Agent implementation settings differ from checkpoint configuration")
     agent.load(str(path))
     if weights_digest(agent) != meta["weights_sha256"]:
         raise ValueError("Loaded weights differ from checkpoint metadata")
@@ -156,7 +167,8 @@ def main():
                         help="JSON containing nominal and degraded metric dictionaries")
     args = parser.parse_args()
     cfg, _ = checkpoint_config(args.checkpoint)
-    agent = DQNAgent(state_size=6, action_size=2)
+    # A seed is required only if deterministic TensorFlow operations were requested.
+    agent = DQNAgent.from_config(cfg, seed=0 if cfg.dqn_deterministic_ops else None)
     load_frozen(agent, cfg, args.checkpoint)
     with open(args.snapshots, encoding="utf-8") as stream:
         snapshots = json.load(stream)

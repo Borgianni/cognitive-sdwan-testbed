@@ -7,6 +7,7 @@ from pathlib import Path
 from statistics import fmean, stdev
 
 from .config import RLConfig
+from .statistical_core import describe
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
 
@@ -20,9 +21,7 @@ def is_hash(value):
 
 
 def stats(values):
-    values = list(values)
-    return {"n": len(values), "mean": fmean(values),
-            "sample_sd": stdev(values) if len(values) > 1 else None}
+    return describe(values)
 
 
 def read_run(path, split):
@@ -119,7 +118,7 @@ def report(training_paths, evaluation_paths=()):
                            "individual_runs": training},
               "held_out": None,
               "interpretation": "Online learning dynamics, not a convergence proof. "
-                                "Sample SD describes variation across runs, not confidence intervals."}
+                                "SD describes variation across runs; 95% t intervals are pointwise, not simultaneous bands."}
     evaluations = [read_run(p, "held_out_test") for p in evaluation_paths]
     if not evaluations:
         return result

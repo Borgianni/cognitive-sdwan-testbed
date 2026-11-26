@@ -345,6 +345,21 @@ To ensure reproducibility:
 
 ---
 
+## Statistical evaluation (C35-C37)
+
+Install `requirements-analysis.txt` in the offline analysis environment
+(SciPy is required for t intervals; no network emulator needed).
+The main `sdwan_rl.statistical_report` locks scenarios, seeds,
+configurations, impairment windows, and four primary hypotheses
+before held-out evaluation. It preserves run-level distributions,
+failure inventory, paired absolute effects and Holm-adjusted
+sign-flip p-values (assumptions apply). Exploratory sensitivity,
+probe impact, learning and scalability reports use shared descriptive
+statistics and pointwise intervals, not independent tick tests.
+See [statistical protocol](docs/revision-r1-c35-c37-statistics.md)
+and [report instructions](docs/revision-r1-c35-c37-main-report.md).
+No new experimental results are claimed on this branch.
+
 ## Bounded scalability and modeling scope
 
 The main dual-tunnel runner retains the earlier experiment protocol.

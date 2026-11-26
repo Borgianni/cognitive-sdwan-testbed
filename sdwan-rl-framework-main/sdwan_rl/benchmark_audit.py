@@ -9,6 +9,7 @@ from .agents.utility import GreedyUtilityAgent, finite, snapshot_utilities, vali
 from .agents.ewma import EWMALatencyAgent
 from .agents.uniform_random import UniformRandomAgent
 from .config import RLConfig
+from .statistical_core import describe
 from .cost_audit import cost_qos_summary
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
@@ -217,17 +218,16 @@ def paired_report(reports, seeds, agents=BENCHMARK_AGENTS):
                            "mean_qos_utility_valid_selected", "mean_selected_rtt_ms",
                            "mean_selected_loss_pct", "mean_selected_residual_mbps",
                            "lte_selection_fraction"):
-                numbers = [r["cost_qos"][metric] for r in runs if r["cost_qos"][metric] is not None]
-                cost_qos_stats[metric] = {
-                    "n_seeds": len(numbers), "mean": fmean(numbers) if numbers else None,
-                    "sample_sd": stdev(numbers) if len(numbers) > 1 else None}
+                summary = describe(r["cost_qos"][metric] for r in runs)
+                cost_qos_stats[metric] = {"n_seeds": summary["n"], **summary}
             summaries.append({"scenario_id": scenario, "agent": agent, "n_seeds": len(seeds),
                               "mean_logged_reward": fmean(values),
                               "sample_sd_across_seeds": stdev(values) if len(values) > 1 else None,
+                              "reward_distribution": describe(values),
                               "cost_qos_across_seeds": cost_qos_stats})
     return {"manifest_sha256": ref["manifest_sha256"], "seeds": seeds,
             "agents": agents, "scenario_ids": scenarios, "summaries": summaries,
-            "interpretation": "Descriptive run-level summaries only; no significance claims. "
+            "interpretation": "Run-level summaries and pointwise t intervals; no significance claims. "
                               "Matching seeds does not guarantee identical network randomness."}
 
 

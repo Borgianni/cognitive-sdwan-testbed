@@ -13,9 +13,22 @@ from .policy_audit import append_trace, validate_run_seed
 from .telemetry_core import TelemetryConfig
 from .telemetry_cli import add_telemetry_arguments, telemetry_kwargs
 from .telemetry_audit import primary_summary
+from .statistical_core import describe, equivalence, finite
 
 
-def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801, cfg=None):
+EQUIVALENCE_METRICS = ("primary_rtt_ms", "primary_loss_pct", "primary_delivered_payload_mbps")
+
+
+def validate_margins(margins):
+    if margins is None:
+        return None
+    if not isinstance(margins, dict) or set(margins) != set(EQUIVALENCE_METRICS) or any(
+            not finite(v) or v <= 0 for v in margins.values()):
+        raise ValueError("Specify positive margins for RTT (ms), loss (percentage points), delivered payload (Mbps)")
+    return dict(margins)
+
+
+def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801, cfg=None, margins=None):
     cfg = cfg if cfg is not None else TelemetryConfig()
     if cfg.observation_lag_ticks or cfg.carry_observations_across_episodes:
         raise ValueError('Probe-impact runs do not use policy history')
@@ -42,7 +55,7 @@ def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801, cfg=None):
                                for p in conditions)
     return {"manifest_sha256": digest(manifest), "scenarios": scenarios, "seeds": seeds,
             "actions": actions, "order_seed": order_seed, "entries": entries,
-            "telemetry_config": asdict(cfg),
+            "telemetry_config": asdict(cfg), "equivalence_margins": validate_margins(margins),
             "status": "planned_not_executed"}
 
 
@@ -148,7 +161,8 @@ def compare(paths, design):
         observed[key] = primary_summary(r["telemetry"] for r in windows)
     if set(observed) != expected:
         raise ValueError("Incomplete paired probe-impact matrix")
-    metrics = ("primary_rtt_ms", "primary_loss_pct", "primary_delivered_payload_mbps")
+    margins = validate_margins(design.get("equivalence_margins"))
+    metrics = EQUIVALENCE_METRICS
     comparisons = []
     for scenario in design["scenarios"]:
         for action in design["actions"]:
@@ -160,13 +174,15 @@ def compare(paths, design):
                                                for k in metrics}})
             summary = {}
             for key in metrics:
-                vals = [p["on_minus_off"][key] for p in pairs if p["on_minus_off"][key] is not None]
-                summary[key] = {"n_pairs": len(vals), "mean_delta": fmean(vals) if vals else None,
-                                "sample_sd": stdev(vals) if len(vals) > 1 else None}
+                vals = [p["on_minus_off"][key] for p in pairs]
+                stats = describe(vals)
+                summary[key] = {"n_pairs": stats["n"], "mean_delta": stats["mean"], **stats,
+                                "equivalence": equivalence(vals,margins[key]) if margins is not None else None}
             comparisons.append({"scenario": scenario, "action": action, "pairs": pairs, "summary": summary})
     return {"design": design, "telemetry_config": common, "comparisons": comparisons,
             "interpretation": "Probe-on minus probe-off descriptive paired differences. "
-                              "Declare practical margins and uncertainty before claiming negligible effect."}
+                              "Equivalence is exploratory and requires locked margins, appropriate assumptions and coverage; "
+                              "no joint equivalence claim is generated."}
 
 
 def export_calibration(path):
@@ -204,6 +220,7 @@ def main():
     planning.add_argument("--seeds", nargs="+", type=int, required=True)
     planning.add_argument("--actions", nargs="+", type=int, default=[0, 1])
     planning.add_argument("--order-seed", type=int, default=8801)
+    planning.add_argument("--equivalence-margins", help="JSON file; optional prespecified positive physical margins")
     add_telemetry_arguments(planning)
     running = sub.add_parser("run")
     running.add_argument("--manifest", required=True)
@@ -225,7 +242,8 @@ def main():
         return
     if args.command == "plan":
         value = plan(read_manifest(args.manifest), args.scenarios, args.seeds, args.actions,
-                     args.order_seed, TelemetryConfig(**telemetry_kwargs(args)))
+                     args.order_seed, TelemetryConfig(**telemetry_kwargs(args)),
+                     json.loads(Path(args.equivalence_margins).read_text()) if args.equivalence_margins else None)
     elif args.command == "compare":
         value = compare(args.traces, json.loads(Path(args.plan).read_text()))
     else:

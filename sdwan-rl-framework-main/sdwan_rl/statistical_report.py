@@ -126,7 +126,15 @@ def window_metrics(rows, cfg, telemetry):
 def read_inventory(path, plan, split):
     """Track failed/incomplete attempts; do not silently substitute retries."""
     with open(path, encoding="utf-8") as stream:
-        rows = [json.loads(line) for line in stream if line.strip()]
+        lines = [line for line in stream if line.strip()]
+    rows, truncated = [], False
+    for i,line in enumerate(lines):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i != len(lines)-1 or not rows:
+                raise ValueError(f"{path}: malformed trace before final record")
+            truncated = True
     if not rows or rows[0].get("kind") != "run":
         raise ValueError(f"{path}: no identifiable run header")
     h, end = rows[0], rows[-1]
@@ -145,10 +153,11 @@ def read_inventory(path, plan, split):
         raise ValueError("Unexpected evaluation agent")
     if agent == "ewma" and h["heuristic_config"] != {"alpha": plan["ewma_alpha"], "reset_each_episode": True}:
         raise ValueError("EWMA alpha differs from the locked plan")
-    status = ("complete" if end.get("kind") == "complete" else
+    status = ("incomplete" if truncated else "complete" if end.get("kind") == "complete" else
               "failed" if end.get("kind") == "failed" else "incomplete")
     return {"path": str(path), "agent": agent, "seed": seed, "scenario_id": protocol["scenario_id"],
             "status": status, "failure": end.get("error") if status == "failed" else None,
+            "truncated_final_record": truncated,
             "failure_episode": end.get("episode") if status == "failed" else None,
             "failure_tick": end.get("tick") if status == "failed" else None,
             "recorded_decisions": sum(r.get("kind") == "decision" for r in rows),

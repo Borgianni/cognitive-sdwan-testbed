@@ -7,6 +7,7 @@ import numpy as np
 
 from .agents.uniform_random import UniformRandomAgent
 from .config import RLConfig
+from .statistical_core import describe, paired
 from .scale_cases import (CASES, validate_scenario, digest, primary_rules, static_rules,
                           path_residual, PRIMARY_PORT)
 from .scale_policy import PathEnvironment, policy_signature
@@ -188,9 +189,7 @@ def audit(path):
 
 
 def stats(values):
-    values = [v for v in values if v is not None]
-    return {"n": len(values), "mean": fmean(values) if values else None,
-            "sample_sd": stdev(values) if len(values) > 1 else None}
+    return describe(values)
 
 
 def benchmark(reports, cases, seeds, agents):
@@ -240,7 +239,15 @@ def benchmark(reports, cases, seeds, agents):
                       "tick_work_mean_s": [r["timing_s"]["tick_work"]["mean"] for r in runs]}
             for k in ("loss_pct", "mean_rtt_ms", "echo_coverage", "delivered_payload_mbps"):
                 values[k] = [r["primary"][k] for r in runs]
-            summaries.append({"case": case, "agent": agent, "metrics": {k: stats(v) for k,v in values.items()}})
+            effects = None
+            if agent != "dqn" and "dqn" in agents:
+                candidates = [observed[(case, seed, "dqn")] for seed in seeds]
+                effects = {k: paired([r["primary"][k] for r in candidates],
+                                     [r["primary"][k] for r in runs],
+                                     relative=k in ("loss_pct","mean_rtt_ms"))
+                           for k in ("loss_pct","mean_rtt_ms","echo_coverage","delivered_payload_mbps")}
+            summaries.append({"case": case, "agent": agent, "metrics": {k: stats(v) for k,v in values.items()},
+                              "dqn_minus_this_baseline": effects})
     return {"cases": cases, "seeds": seeds, "agents": agents, "summaries": summaries,
             "runs": list(observed.values()),
             "interpretation": "Matched within-case comparisons; changing catalog changes difficulty. "

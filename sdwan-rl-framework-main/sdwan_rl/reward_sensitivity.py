@@ -6,6 +6,7 @@ from statistics import fmean, stdev
 
 from .agents.utility import snapshot_utilities
 from .config import RLConfig
+from .statistical_core import describe, paired
 from .experiment_protocol import read_manifest
 from .policy_audit import validate_run_seed
 
@@ -146,12 +147,12 @@ def policy_report(paths, plan):
     for name in configurations:
         for scenario in plan["test_scenario_ids"]:
             rows = [observed[(name, seed, scenario)] for seed in plan["seeds"]]
-            stats = {}
-            for metric in metrics:
-                values = [r[metric] for r in rows if r[metric] is not None]
-                stats[metric] = {"n": len(values), "mean": fmean(values) if values else None,
-                                 "sample_sd": stdev(values) if len(values) > 1 else None}
-            summaries.append({"id": name, "scenario_id": scenario, "metrics": stats})
+            stats = {metric: describe(r[metric] for r in rows) for metric in metrics}
+            reference = [observed[("reference", seed, scenario)] for seed in plan["seeds"]]
+            effects = {metric: paired([r[metric] for r in rows], [r[metric] for r in reference])
+                       for metric in metrics} if name != "reference" else None
+            summaries.append({"id": name, "scenario_id": scenario, "metrics": stats,
+                              "candidate_minus_reference": effects})
     return {"plan": plan, "summaries": summaries, "runs": list(observed.values()),
             "interpretation": "Common-reference rescore of observed trajectories. "
                               "Not actual economic cost or a counterfactual network outcome."}

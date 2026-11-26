@@ -4,7 +4,7 @@ import platform
 import sys
 
 PACKAGES = ("tensorflow", "tensorflow-cpu", "tensorflow-intel", "keras", "numpy",
-            "mininet", "ryu", "gym", "pandas", "matplotlib", "requests")
+            "mininet", "ryu", "gym", "pandas", "matplotlib", "requests", "scipy")
 
 
 def runtime_environment():

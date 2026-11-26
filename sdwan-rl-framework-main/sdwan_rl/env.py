@@ -136,10 +136,10 @@ class SDWANEnv:
         return self.reward_terms(action)["reward"]
 
     def update_from_metrics(self, metrics: Dict) -> None:
-        self.lte['delay'] = metrics['lte']['delay']
-        self.lte['thr']   = metrics['lte']['throughput']
-        self.lte['loss']  = metrics['lte']['packet_loss']
-        self.sat['delay'] = metrics['satellite']['delay']
-        self.sat['thr']   = metrics['satellite']['throughput']
-        self.sat['loss']  = metrics['satellite']['packet_loss']
+        # Missing probes are explicit nulls on the wire, not zero measurements.
+        for name, target in (("lte", self.lte), ("satellite", self.sat)):
+            for wire_key, key in (("delay", "delay"), ("throughput", "thr"),
+                                  ("packet_loss", "loss")):
+                value = metrics[name][wire_key]
+                target[key] = float("nan") if value is None else value
         self._has_metrics = True

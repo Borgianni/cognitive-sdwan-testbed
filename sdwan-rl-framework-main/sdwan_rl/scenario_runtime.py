@@ -57,7 +57,7 @@ def ofport(node, iface):
 
 
 def flow_counter(node, cookie):
-    output = checked(node, ["ovs-ofctl", "dump-flows", node.name])
+    output = checked(node, ["ovs-ofctl", "-O", "OpenFlow13", "dump-flows", node.name])
     matches = []
     for line in output.splitlines():
         m = re.search(r"cookie=0x([0-9a-fA-F]+)", line)
@@ -83,7 +83,7 @@ class ScenarioRuntime:
 
     def _rule(self, node, incoming, outgoing, port, direction, cookie):
         match = f"priority={PRIORITY},udp,in_port={incoming},tp_{direction}={port}"
-        checked(node, ["ovs-ofctl", "add-flow", node.name,
+        checked(node, ["ovs-ofctl", "-O", "OpenFlow13", "add-flow", node.name,
                        f"cookie={cookie:#x},{match},actions=output:{outgoing}"])
         self.rules.append((node, match))
         return (node, cookie)
@@ -153,6 +153,6 @@ class ScenarioRuntime:
                     proc.wait(timeout=2)
         for node, match in reversed(self.rules):
             try:
-                checked(node, ["ovs-ofctl", "--strict", "del-flows", node.name, match])
+                checked(node, ["ovs-ofctl", "-O", "OpenFlow13", "--strict", "del-flows", node.name, match])
             except RuntimeError as exc:
                 print(f"[scenario cleanup] {exc}")

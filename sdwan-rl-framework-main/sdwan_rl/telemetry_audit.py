@@ -163,8 +163,8 @@ def age_study(paths, seeds, scenarios, lags=(0, 1, 2)):
             keys = ("mean_logged_reward", "primary_loss_pct", "primary_rtt_ms",
                     "primary_rtt_echo_coverage", "primary_delivered_payload_mbps")
             metrics = {k: describe(r[k] for r in rows) for k in keys}
-            reference = [observed[(seed, scenario, 0)] for seed in seeds]
-            effects = {k: paired([r[k] for r in rows], [r[k] for r in reference])
+            baseline_rows = [observed[(seed, scenario, 0)] for seed in seeds]
+            effects = {k: paired([r[k] for r in rows], [r[k] for r in baseline_rows])
                        for k in keys} if lag else None
             summaries.append({"scenario": scenario, "lag": lag,
                               "mean_actual_oldest_completion_age_s": fmean(r["oldest_completion_age_s"]["mean"] for r in rows),

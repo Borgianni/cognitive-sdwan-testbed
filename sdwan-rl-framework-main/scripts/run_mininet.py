@@ -4,7 +4,8 @@ from sdwan_rl.config import RLConfig
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"])
+    parser.add_argument("--agent-type", type=str, default="dqn", choices=["dqn", "random", "ewma", "greedy_utility"],
+                        help="Random is a uniform stochastic reference, not a performance bound")
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--cli", action="store_true")
     parser.add_argument("--lte-loss-threshold-pct", type=float, default=10.0,

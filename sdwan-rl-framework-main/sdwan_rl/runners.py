@@ -23,32 +23,9 @@ from .config import ExperimentConfig, RLConfig
 from .agents.ewma import EWMALatencyAgent
 from .agents.utility import GreedyUtilityAgent
 
-HEURISTIC_AGENTS = ("ewma", "greedy_utility")
+from .agents.uniform_random import UniformRandomAgent
 
-
-# ----------------------------------------------------------------------
-# Simple Random Agent (definizione inline per semplicità)
-# ----------------------------------------------------------------------
-class RandomAgent:
-    def __init__(self, action_size):
-        self.action_size = action_size
-        self.name = "Random"
-
-    def act(self, state):
-        # state non viene usato, sceglie uniformemente a caso
-        return random.randrange(self.action_size)
-
-    def remember(self, *args, **kwargs):
-        pass
-
-    def train_step(self):
-        pass
-
-    def save(self, path):
-        pass
-
-    def load(self, path):
-        pass
+HEURISTIC_AGENTS = ("ewma", "greedy_utility", "random")
 
 
 # ----------------------------------------------------------------------
@@ -75,6 +52,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     """
     agent_type: 'dqn', 'random', 'ewma' or 'greedy_utility'
     """
+    # Preserve the old diagnostic CLI; formal baselines must use heuristic mode.
+    if agent_type == "random" and mode == "online" and split == "diagnostic":
+        mode = "heuristic"
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
     scenario = None
@@ -145,7 +125,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                          eps_start=rl_cfg.eps_start, eps_end=rl_cfg.eps_end, eps_decay=rl_cfg.eps_decay)
         print("[INFO] Using DQN agent")
     elif agent_type == 'random':
-        agent = RandomAgent(action_size=2)
+        agent = UniformRandomAgent(seed=seed, action_size=2)
         print("[INFO] Using Random agent (no learning)")
     elif agent_type == "ewma":
         agent = EWMALatencyAgent(ewma_alpha)
@@ -170,7 +150,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                             "heuristic_config": {"alpha": agent.alpha, "reset_each_episode": True}
                             if agent_type == "ewma" else
                             {"utility": "shared_env_reward", "reset_each_episode": True}
-                            if agent_type == "greedy_utility" else None,
+                            if agent_type == "greedy_utility" else
+                            agent.configuration if agent_type == "random" else None,
                             "training_protocol": training_meta.get("training_protocol") if training_meta else None,
                             "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
     topo = SDWANTopo()

@@ -3,9 +3,11 @@ import argparse
 import json
 import math
 from pathlib import Path
-from statistics import fmean
+from statistics import fmean, stdev
 
 from .agents.utility import GreedyUtilityAgent, finite, snapshot_utilities, valid_tunnels
+from .agents.ewma import EWMALatencyAgent
+from .agents.uniform_random import UniformRandomAgent
 from .config import RLConfig
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
@@ -20,6 +22,7 @@ def snapshot_gap(metrics, action, cfg):
     best = max(scores)
     return {"utility_by_action": list(scores), "selected_utility": scores[action],
             "oracle_utility": best, "gap": best - scores[action],
+            "expected_uniform_utility": fmean(scores),
             "matches_oracle": math.isclose(scores[action], best, rel_tol=0, abs_tol=1e-9)}
 
 
@@ -30,6 +33,7 @@ def summarize(rows):
             "mean_selected_utility": fmean(r["selected_utility"] for r in available) if available else None,
             "mean_oracle_utility": fmean(r["oracle_utility"] for r in available) if available else None,
             "mean_snapshot_gap": fmean(r["gap"] for r in available) if available else None,
+            "mean_expected_uniform_utility": fmean(r["expected_uniform_utility"] for r in available) if available else None,
             "oracle_match_fraction": fmean(r["matches_oracle"] for r in available) if available else None}
 
 
@@ -42,7 +46,7 @@ def audit_trace(path):
     header, end = rows[0], rows[-1]
     agent = header.get("agent_type")
     mode = "frozen" if agent == "dqn" else "heuristic"
-    if agent not in ("dqn", "ewma", "greedy_utility") or header.get("mode") != mode:
+    if agent not in ("dqn", "ewma", "greedy_utility", "random") or header.get("mode") != mode:
         raise ValueError("Unsupported evaluation policy or mode")
     seed = header.get("run_seed")
     validate_run_seed(seed, required=True)
@@ -69,7 +73,22 @@ def audit_trace(path):
         raise ValueError("Unexpected learning state during evaluation")
 
     decision, measured, rewards = [], [], []
-    greedy = GreedyUtilityAgent(cfg) if agent == "greedy_utility" else None
+    replay = None
+    heuristic_config = header.get("heuristic_config")
+    if agent == "greedy_utility":
+        replay = GreedyUtilityAgent(cfg)
+        if heuristic_config != {"utility": "shared_env_reward", "reset_each_episode": True}:
+            raise ValueError("Invalid greedy configuration")
+    elif agent == "ewma":
+        if not isinstance(heuristic_config, dict) or set(heuristic_config) != {"alpha", "reset_each_episode"}:
+            raise ValueError("Missing EWMA configuration")
+        if heuristic_config["reset_each_episode"] is not True:
+            raise ValueError("Unexpected EWMA reset semantics")
+        replay = EWMALatencyAgent(heuristic_config["alpha"])
+    elif agent == "random":
+        replay = UniformRandomAgent(seed=seed, action_size=2)
+        if heuristic_config != replay.configuration:
+            raise ValueError("Invalid uniform random configuration")
     for index, row in enumerate(rows[1:-1]):
         ep, tick = index // ticks + 1, index % ticks
         if (row.get("kind") != "decision" or row.get("episode") != ep or row.get("tick") != tick
@@ -92,12 +111,12 @@ def audit_trace(path):
                 raise ValueError("Frozen DQN did not choose the logged greedy action")
         elif row.get("q_values") is not None or row.get("greedy_action") is not None:
             raise ValueError("Non-learning comparator must not claim Q-values")
-        if greedy is not None:
+        if replay is not None:
             if tick == 0:
-                greedy.reset()
-            expected_action, details = greedy.decide(previous)
+                replay.reset()
+            expected_action, details = replay.decide(previous)
             if expected_action != action or details != row.get("heuristic_details"):
-                raise ValueError("Greedy action differs from causal utility decision")
+                raise ValueError("Comparator action differs from replayed policy decision")
         decision.append(snapshot_gap(previous, action, cfg))
         post = snapshot_gap(current, action, cfg)
         if post is not None and not math.isclose(post["selected_utility"], reward, rel_tol=1e-9, abs_tol=1e-9):
@@ -106,7 +125,11 @@ def audit_trace(path):
         rewards.append(reward)
     return {"path": str(path), "agent": agent, "seed": seed,
             "scenario_id": protocol["scenario_id"], "manifest_sha256": protocol["manifest_sha256"],
-            "rl_config": header["rl_config"], "heuristic_config": header.get("heuristic_config"),
+            "rl_config": header["rl_config"], "heuristic_config": heuristic_config,
+            "test_scenario_ids": sorted(r["id"] for r in protocol["manifest"]["scenarios"]
+                                        if r["split"] == "held_out_test"),
+            "model_weights_sha256": initial,
+            "training_protocol": header.get("training_protocol"),
             "ticks": len(rewards), "mean_logged_reward_all_ticks": fmean(rewards),
             "decision_time_snapshot": summarize(decision),
             "subsequent_measurement_snapshot": summarize(measured),
@@ -114,14 +137,78 @@ def audit_trace(path):
                               "No counterfactual network trajectory, return bound or forwarding proof."}
 
 
+# Compare one DQN configuration at a time; observation parameters may differ
+# between the DQN and non-learning comparators. All remaining RL fields
+# must match, including any future reward parameters added to RLConfig.
+OBSERVATION_FIELDS = {"state_representation", "continuous_delay_scale_ms",
+                      "lte_delay_threshold_ms", "sat_delay_threshold_ms",
+                      "lte_loss_threshold_pct", "sat_loss_threshold_pct",
+                      "bandwidth_state_mode", "lte_residual_threshold",
+                      "sat_residual_threshold"}
+BENCHMARK_AGENTS = ("dqn", "ewma", "greedy_utility", "random")
+
+
+def paired_report(reports, seeds, agents=BENCHMARK_AGENTS):
+    """Require every declared agent/seed/test scenario; no silent omissions."""
+    reports, seeds, agents = list(reports), list(seeds), list(agents)
+    if not reports or not seeds or len(set(seeds)) != len(seeds):
+        raise ValueError("Declare nonempty unique replicate seeds")
+    for seed in seeds:
+        validate_run_seed(seed, required=True)
+    if not agents or len(set(agents)) != len(agents) or not set(agents) <= set(BENCHMARK_AGENTS):
+        raise ValueError("Declare unique supported agents")
+    ref = reports[0]
+    scenarios = ref["test_scenario_ids"]
+    if not scenarios:
+        raise ValueError("Manifest has no test scenarios")
+    expected = {(agent, seed, scenario) for agent in agents for seed in seeds for scenario in scenarios}
+    observed = {}
+    policy_configs, models = {}, {}
+    common_cfg = lambda r: {k: v for k, v in r["rl_config"].items() if k not in OBSERVATION_FIELDS}
+    for row in reports:
+        key = (row["agent"], row["seed"], row["scenario_id"])
+        if key not in expected or key in observed:
+            raise ValueError("Unexpected or duplicate benchmark result")
+        if (row["manifest_sha256"] != ref["manifest_sha256"]
+                or row["test_scenario_ids"] != scenarios or common_cfg(row) != common_cfg(ref)):
+            raise ValueError("Benchmark runs do not share scenario manifest and common configuration")
+        config = (row["rl_config"], row["heuristic_config"])
+        if policy_configs.setdefault(row["agent"], config) != config:
+            raise ValueError("Policy configuration changes within benchmark")
+        if row["agent"] == "dqn":
+            model = (row["model_weights_sha256"], row["training_protocol"])
+            if models.setdefault(row["seed"], model) != model:
+                raise ValueError("DQN checkpoint changes between scenarios for a replicate")
+        observed[key] = row
+    if set(observed) != expected:
+        raise ValueError("Incomplete declared benchmark matrix")
+    summaries = []
+    for scenario in scenarios:
+        for agent in agents:
+            values = [observed[(agent, seed, scenario)]["mean_logged_reward_all_ticks"] for seed in seeds]
+            summaries.append({"scenario_id": scenario, "agent": agent, "n_seeds": len(seeds),
+                              "mean_logged_reward": fmean(values),
+                              "sample_sd_across_seeds": stdev(values) if len(values) > 1 else None})
+    return {"manifest_sha256": ref["manifest_sha256"], "seeds": seeds,
+            "agents": agents, "scenario_ids": scenarios, "summaries": summaries,
+            "interpretation": "Descriptive run-level summaries only; no significance claims. "
+                              "Matching seeds does not guarantee identical network randomness."}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--output", required=True, help="New report JSON")
+    parser.add_argument("--paired-seeds", nargs="+", type=int, help="Predeclared seeds for complete matrix")
+    parser.add_argument("--paired-agents", nargs="+", choices=BENCHMARK_AGENTS,
+                        default=list(BENCHMARK_AGENTS))
     args = parser.parse_args()
     reports = [audit_trace(path) for path in args.traces]
+    result = {"runs": reports}
+    if args.paired_seeds is not None:
+        result["paired"] = paired_report(reports, args.paired_seeds, args.paired_agents)
     with Path(args.output).open("x", encoding="utf-8") as stream:
-        json.dump({"runs": reports}, stream, indent=2, allow_nan=False)
+        json.dump(result, stream, indent=2, allow_nan=False)
         stream.write("\n")
 
 

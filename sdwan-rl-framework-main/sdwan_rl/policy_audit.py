@@ -41,7 +41,7 @@ def save_checkpoint(agent, cfg, path):
         raise FileExistsError(str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     agent.save(str(path))
-    meta = {"rl_config": asdict(cfg), "checkpoint_sha256": file_digest(path),
+    meta = {"observation_schema": 2, "rl_config": asdict(cfg), "checkpoint_sha256": file_digest(path),
             "weights_sha256": weights_digest(agent)}
     with metadata_path(path).open("x", encoding="utf-8") as stream:
         json.dump(meta, stream, indent=2)
@@ -53,7 +53,21 @@ def checkpoint_config(path):
         meta = json.load(stream)
     if file_digest(path) != meta["checkpoint_sha256"]:
         raise ValueError("Checkpoint file does not match its metadata")
-    return RLConfig(**meta["rl_config"]), meta
+    fields = meta["rl_config"]
+    # C04/C05 checkpoints predate the continuous encoder and were binary.
+    # Require explicit encoding fields for checkpoints saved by C06 onwards.
+    schema = meta.get("observation_schema", 1)
+    if schema == 1:
+        if "state_representation" in fields or "continuous_delay_scale_ms" in fields:
+            raise ValueError("Unexpected observation fields in legacy metadata")
+        fields = {**fields, "state_representation": "binary",
+                  "continuous_delay_scale_ms": 100.0}
+    elif schema == 2:
+        if not {"state_representation", "continuous_delay_scale_ms"} <= fields.keys():
+            raise ValueError("Checkpoint is missing observation configuration")
+    else:
+        raise ValueError("Unsupported observation schema")
+    return RLConfig(**fields), meta
 
 
 def load_frozen(agent, cfg, path):

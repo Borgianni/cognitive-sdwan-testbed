@@ -10,16 +10,21 @@ from .config import RLConfig
 from .env import SDWANEnv
 
 ACTIONS = ("LTE", "LEO")
-MODES = ("legacy_code", "legacy_paper", "revised_binary")
+MODES = ("legacy_code", "legacy_paper", "revised_binary", "continuous")
 TIE_TOL = 1e-9
 
 
 def encoding_config(cfg, mode):
+    if mode == "continuous":
+        return replace(cfg, state_representation="continuous",
+                       bandwidth_state_mode="residual_threshold")
     if mode == "revised_binary":
-        return replace(cfg, bandwidth_state_mode="residual_threshold")
+        return replace(cfg, state_representation="binary",
+                       bandwidth_state_mode="residual_threshold")
     if mode not in MODES:
         raise ValueError(f"Unknown encoding: {mode}")
-    return replace(cfg, lte_delay_threshold_ms=700.0, sat_delay_threshold_ms=1200.0,
+    return replace(cfg, state_representation="binary",
+                   lte_delay_threshold_ms=700.0, sat_delay_threshold_ms=1200.0,
                    lte_loss_threshold_pct=0.0, sat_loss_threshold_pct=0.0,
                    bandwidth_state_mode=("legacy_throughput" if mode == "legacy_code"
                                          else "positive_residual"))
@@ -78,6 +83,11 @@ def audit(snapshots, cfg):
     ambiguous = [g for g in details if g["conflicting_preferences"]]
     return {
         "samples": n, "distinct_observations": len(details),
+        "singleton_observations": sum(g["samples"] == 1 for g in details),
+        "fraction_samples_in_singleton_observations": sum(g["samples"] == 1 for g in details) / n,
+        "grouping": "exact_float32_observation_equality",
+        "interpretation": ("Empirical hindsight gap only; singleton groups can make "
+                           "the gap zero without demonstrating generalization."),
         "conflicting_observations": len(ambiguous),
         "fraction_samples_in_conflicting_observations": sum(g["samples"] for g in ambiguous) / n,
         "mean_snapshot_oracle_reward": weighted("mean_snapshot_oracle_reward"),

@@ -29,6 +29,11 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["online", "frozen"], default="online")
     parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
     parser.add_argument("--trace", help="New JSONL policy trace file")
+    parser.add_argument("--state-representation", choices=["binary", "continuous"],
+                        default=RLConfig.state_representation)
+    parser.add_argument("--continuous-delay-scale-ms", type=float,
+                        default=RLConfig.continuous_delay_scale_ms,
+                        help="Common RTT normalization scale in ms (continuous only)")
     args = parser.parse_args()
     
     run_experiment(
@@ -40,7 +45,9 @@ if __name__ == "__main__":
                         sat_delay_threshold_ms=args.sat_delay_threshold_ms,
                         bandwidth_state_mode=args.bandwidth_state_mode,
                         lte_residual_threshold=args.lte_residual_threshold,
-                        sat_residual_threshold=args.sat_residual_threshold),
+                        sat_residual_threshold=args.sat_residual_threshold,
+                        state_representation=args.state_representation,
+                        continuous_delay_scale_ms=args.continuous_delay_scale_ms),
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         start_cli=args.cli
     )

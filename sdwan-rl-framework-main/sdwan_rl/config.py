@@ -50,7 +50,16 @@ class RLConfig:
     lte_residual_threshold: float = 0.20
     sat_residual_threshold: float = 0.20
 
+    # Continuous observation uses a common RTT scale (not an SLA threshold).
+    state_representation: str = "binary"
+    continuous_delay_scale_ms: float = 100.0
+
     def __post_init__(self):
+        if self.state_representation not in ("binary", "continuous"):
+            raise ValueError("Unknown state_representation")
+        if (not math.isfinite(self.continuous_delay_scale_ms)
+                or self.continuous_delay_scale_ms <= 0.0):
+            raise ValueError("continuous_delay_scale_ms must be finite and positive")
         if self.bandwidth_state_mode not in (
             "residual_threshold", "legacy_throughput", "positive_residual"
         ):

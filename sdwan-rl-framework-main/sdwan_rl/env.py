@@ -8,11 +8,11 @@ A_LTE, A_SAT = 0, 1
 
 @dataclass
 class State:
-    # Binary features (delay_ok, delay_ok_sat, loss_ok_lte, loss_ok_sat, bw_ok_lte, bw_ok_sat)
+    # Feature order: LTE/LEO delay, LTE/LEO loss, LTE/LEO bandwidth.
     vec: np.ndarray
 
 class SDWANEnv:
-    """A lightweight env wrapper with your reward Eq. (1) and booleanized state."""
+    """Reward and configurable six-feature observation of the network."""
     def __init__(self, cfg: RLConfig = None):
         self.cfg = cfg if cfg is not None else RLConfig()
         self.ticks = 0
@@ -46,7 +46,36 @@ class SDWANEnv:
             return int(residual > 0.0)
         return int(residual >= threshold)
 
+    def _continuous_state(self) -> State:
+        if not self._has_metrics:
+            return State(vec=np.zeros(6, dtype=np.float32))
+
+        def delay_quality(delay):
+            if not math.isfinite(delay) or delay <= 0.0:
+                return 0.0
+            return 1.0 / (1.0 + delay / self.cfg.continuous_delay_scale_ms)
+
+        def loss_quality(loss):
+            if not math.isfinite(loss) or not 0.0 <= loss <= 100.0:
+                return 0.0
+            return 1.0 - loss / 100.0
+
+        def bandwidth_quality(throughput, capacity):
+            residual = self.residual_capacity_fraction(throughput, capacity)
+            return residual if math.isfinite(residual) else 0.0
+
+        return State(vec=np.array([
+            delay_quality(self.lte['delay']),
+            delay_quality(self.sat['delay']),
+            loss_quality(self.lte['loss']),
+            loss_quality(self.sat['loss']),
+            bandwidth_quality(self.lte['thr'], self.cfg.lte_capacity_mbps),
+            bandwidth_quality(self.sat['thr'], self.cfg.sat_capacity_mbps),
+        ], dtype=np.float32))
+
     def make_state(self) -> State:
+        if self.cfg.state_representation == "continuous":
+            return self._continuous_state()
         # The ping probe reports end-to-end RTT, not one-way NetEm delay.
         lte_delay_ok = int(0.0 < self.lte['delay'] <= self.cfg.lte_delay_threshold_ms)
         sat_delay_ok = int(0.0 < self.sat['delay'] <= self.cfg.sat_delay_threshold_ms)

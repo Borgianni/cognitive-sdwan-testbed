@@ -90,6 +90,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     print(f"[INFO] Bandwidth state: {rl_cfg.bandwidth_state_mode}; "
           f"residual thresholds LTE={rl_cfg.lte_residual_threshold}, "
           f"LEO={rl_cfg.sat_residual_threshold}")
+    print(f"[INFO] State representation: {rl_cfg.state_representation}; "
+          f"continuous RTT scale={rl_cfg.continuous_delay_scale_ms} ms")
     env = SDWANEnv(cfg=rl_cfg)
 
     # --- Agent instantiation ---
@@ -230,6 +232,11 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["online", "frozen"], default="online")
     parser.add_argument("--checkpoint", help="New .keras file in online mode; existing file in frozen mode")
     parser.add_argument("--trace", help="New JSONL policy trace file")
+    parser.add_argument("--state-representation", choices=["binary", "continuous"],
+                        default=RLConfig.state_representation)
+    parser.add_argument("--continuous-delay-scale-ms", type=float,
+                        default=RLConfig.continuous_delay_scale_ms,
+                        help="Common RTT normalization scale in ms (continuous only)")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -243,6 +250,8 @@ if __name__ == "__main__":
                       sat_delay_threshold_ms=args.sat_delay_threshold_ms,
                       bandwidth_state_mode=args.bandwidth_state_mode,
                       lte_residual_threshold=args.lte_residual_threshold,
-                      sat_residual_threshold=args.sat_residual_threshold)
+                      sat_residual_threshold=args.sat_residual_threshold,
+                      state_representation=args.state_representation,
+                      continuous_delay_scale_ms=args.continuous_delay_scale_ms)
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    mode=args.mode, checkpoint=args.checkpoint, trace=args.trace)

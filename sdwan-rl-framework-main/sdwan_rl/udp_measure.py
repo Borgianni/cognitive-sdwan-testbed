@@ -33,6 +33,7 @@ def run_server(spec):
     selector = selectors.DefaultSelector()
     result = {}
     seen = {}
+    highest = {}
     try:
         for name, stream in spec["streams"].items():
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -40,7 +41,9 @@ def run_server(spec):
             sock.setblocking(False)
             selector.register(sock, selectors.EVENT_READ, name)
             seen[name] = set()
+            highest[name] = -1
             result[name] = {"received_unique": 0, "received_payload_bytes": 0,
+                            "late_sequence_unique": 0, "max_sequence_lag": 0,
                             "echo_sent": 0, "echo_payload_bytes": 0,
                             "first_receive_s": None, "last_receive_s": None}
         print("READY", flush=True)
@@ -58,6 +61,10 @@ def run_server(spec):
                 if seq is None or seq in seen[name]:
                     continue
                 seen[name].add(seq)
+                if seq < highest[name]:
+                    row["late_sequence_unique"] += 1
+                    row["max_sequence_lag"] = max(row["max_sequence_lag"], highest[name] - seq)
+                highest[name] = max(highest[name], seq)
                 now = stamp()
                 row["received_unique"] += 1
                 row["received_payload_bytes"] += len(data)

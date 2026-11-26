@@ -73,6 +73,11 @@ def stream_measurement(client, server, stream, start_s, end_s, window_s):
     if (client["first_send_s"] is None or client["last_send_s"] is None
             or not start_s <= client["first_send_s"] <= client["last_send_s"] < start_s + window_s):
         raise ValueError("Send timestamps outside measurement window")
+    late = server.get("late_sequence_unique")
+    lag = server.get("max_sequence_lag")
+    if late is not None and (type(late) is not int or not 0 <= late <= received
+                             or type(lag) is not int or not 0 <= lag < sent):
+        raise ValueError("Invalid receive sequence-order counters")
     delay = client["rtt_ms"]
     if echoes == 0:
         if delay is not None:
@@ -82,6 +87,8 @@ def stream_measurement(client, server, stream, start_s, end_s, window_s):
     return {"rtt_ms": delay, "loss_pct": 100.0 * (sent - received) / sent,
             "roundtrip_missing_pct": 100.0 * (sent - echoes) / sent,
             "sent_packets": sent, "received_packets": received, "echo_sent_packets": echo_sent,
+            "late_sequence_unique": late, "max_sequence_lag": lag,
+            "late_sequence_fraction": late / received if late is not None and received else None,
             "echo_received_packets": echoes, "forward_payload_bytes": client["sent_payload_bytes"],
             "reverse_payload_bytes": server["echo_payload_bytes"],
             "received_payload_bytes": server["received_payload_bytes"],

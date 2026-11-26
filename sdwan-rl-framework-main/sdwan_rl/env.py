@@ -13,8 +13,8 @@ class State:
 
 class SDWANEnv:
     """A lightweight env wrapper with your reward Eq. (1) and booleanized state."""
-    def __init__(self, cfg: RLConfig = RLConfig()):
-        self.cfg = cfg
+    def __init__(self, cfg: RLConfig = None):
+        self.cfg = cfg if cfg is not None else RLConfig()
         self.ticks = 0
         self.reset_metrics()
 
@@ -25,8 +25,9 @@ class SDWANEnv:
     def make_state(self) -> State:
         lte_delay_ok = 1 if self.lte['delay'] < 700 else 0
         sat_delay_ok = 1 if self.sat['delay'] < 1200 else 0
-        lte_loss_ok  = 1 if self.lte['loss'] == 0 else 0
-        sat_loss_ok  = 1 if self.sat['loss'] == 0 else 0
+        # Loss is measured end-to-end and expressed as a percentage.
+        lte_loss_ok  = int(0.0 <= self.lte['loss'] <= self.cfg.lte_loss_threshold_pct)
+        sat_loss_ok  = int(0.0 <= self.sat['loss'] <= self.cfg.sat_loss_threshold_pct)
         lte_bw_ok    = 1 if self.lte['thr'] > 0 else 0
         sat_bw_ok    = 1 if self.sat['thr'] > 0 else 0
         return State(vec=np.array([lte_delay_ok, sat_delay_ok, lte_loss_ok, sat_loss_ok, lte_bw_ok, sat_bw_ok], dtype=np.float32))

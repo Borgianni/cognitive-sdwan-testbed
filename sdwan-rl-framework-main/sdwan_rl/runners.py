@@ -62,6 +62,11 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     """
     agent_type: 'dqn' or 'random'
     """
+    exp = exp if exp is not None else ExperimentConfig()
+    rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
+    episode_count = exp.episodes if episodes is None else episodes
+    print(f"[INFO] Packet-loss thresholds: LTE={rl_cfg.lte_loss_threshold_pct}%, "
+          f"LEO={rl_cfg.sat_loss_threshold_pct}%")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     net.start()
@@ -82,7 +87,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         raise ValueError(f"Unknown agent_type: {agent_type} (use 'dqn' or 'random')")
 
     try:
-        for ep in range(1, exp.episodes + 1):
+        for ep in range(1, episode_count + 1):
             set_degradation(net, ep, exp.degrade_lte_ranges)
             env.reset_metrics()
             state = env.make_state().vec
@@ -148,6 +153,10 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=None,
                         help="Override number of episodes (uses ExperimentConfig otherwise)")
     parser.add_argument("--cli", action="store_true", help="Start Mininet CLI after experiment")
+    parser.add_argument("--lte-loss-threshold-pct", type=float, default=10.0,
+                        help="LTE packet-loss observation threshold in percent")
+    parser.add_argument("--sat-loss-threshold-pct", type=float, default=10.0,
+                        help="LEO packet-loss observation threshold in percent")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -155,4 +164,6 @@ if __name__ == "__main__":
     if args.episodes is not None:
         exp_cfg.episodes = args.episodes
 
-    run_experiment(agent_type=args.agent_type, exp=exp_cfg, start_cli=args.cli)
+    rl_cfg = RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
+                      sat_loss_threshold_pct=args.sat_loss_threshold_pct)
+    run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli)

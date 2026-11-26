@@ -32,6 +32,16 @@ class RLConfig:
     threshold_delay_ms: int = 140
     lte_capacity_mbps: float = 250.0
     sat_capacity_mbps: float = 200.0
+    # Observation thresholds in percentage points (10.0 means 10%).
+    # Set both to 0.0 to reproduce the original zero-loss representation.
+    lte_loss_threshold_pct: float = 10.0
+    sat_loss_threshold_pct: float = 10.0
+
+    def __post_init__(self):
+        for name in ("lte_loss_threshold_pct", "sat_loss_threshold_pct"):
+            if not 0.0 <= getattr(self, name) <= 100.0:
+                raise ValueError(f"{name} must be between 0 and 100 percent")
+
 
 @dataclass
 class ControllerConfig:

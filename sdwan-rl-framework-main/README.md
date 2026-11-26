@@ -106,6 +106,7 @@ Recommended:
 
 * Ubuntu 20.04 LTS
 * Ubuntu 22.04 LTS
+* Ubuntu 24.04 LTS (separate environments; see compatibility notes)
 
 For macOS or Windows users, run the framework inside a Linux virtual machine (UTM, VirtualBox, VMware, etc.).
 
@@ -135,19 +136,10 @@ git clone -b major-revision-tnsm https://github.com/Borgianni/cognitive-sdwan-te
 cd cognitive-sdwan-testbed/sdwan-rl-framework-main
 ```
 
-### 2. Create a Virtual Environment
+### 2. Create separate RL and controller environments
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
+For Ubuntu 24.04 / Python 3.12, use the [environment setup and compatibility notes](docs/ubuntu24-environment.md). The RL and Ryu environments have been tested separately on Linux x86_64; the end-to-end integration and clean reinstall are still pending. Do not install Ryu into the RL environment.
 
-### 3. Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
-pip install ryu
-```
 
 ---
 
@@ -173,19 +165,19 @@ and [C39 comparison protocol](docs/revision-r1-c39-comparison.md).
 Open a dedicated terminal:
 
 ```bash
-ryu-manager --ofp-tcp-listen-port 6653 --wsapi-port 8080 ryu_apps/switch_controller.py
+.venv-ryu/bin/ryu-manager --ofp-listen-host 127.0.0.1 --ofp-tcp-listen-port 6653 --wsapi-host 127.0.0.1 --wsapi-port 8080 ryu_apps/switch_controller.py
 ```
 
 ### Step 2 — Run an Experiment
 
-> Revision branch: first validate the Linux/Mininet/Ryu environment and run short diagnostic smoke tests. The examples below are diagnostic, not the final held-out campaign. Run the controller and emulation on an isolated local test host. See `docs/revision-r1-c23-c27-integration.md` and `docs/revision-r1-c24-c28-validation.md` for formal telemetry and timing protocols.
+> Revision branch: first validate the Linux/Mininet/Ryu environment and run short diagnostic smoke tests. The examples below are diagnostic, not the final held-out campaign. Run the controller and emulation on an isolated local test host. The guarded runners refuse existing topology-name collisions and use run-scoped teardown; never invoke global Mininet cleanup on a host with unrelated bridges. No concurrent external network administration. See `docs/revision-r1-c23-c27-integration.md` and `docs/revision-r1-c24-c28-validation.md` for formal telemetry and timing protocols.
 
 From the project root:
 
 #### DQN Agent
 
 ```bash
-sudo -E env PYTHONPATH=. ./venv/bin/python \
+sudo -E env PYTHONPATH=. ./.venv-rl/bin/python \
 scripts/run_mininet.py \
 --agent-type dqn \
 --episodes 60
@@ -194,7 +186,7 @@ scripts/run_mininet.py \
 #### Random Baseline
 
 ```bash
-sudo -E env PYTHONPATH=. ./venv/bin/python \
+sudo -E env PYTHONPATH=. ./.venv-rl/bin/python \
 scripts/run_mininet.py \
 --agent-type random \
 --episodes 60
@@ -203,7 +195,7 @@ scripts/run_mininet.py \
 #### Launch Mininet CLI After Completion
 
 ```bash
-sudo -E env PYTHONPATH=. ./venv/bin/python \
+sudo -E env PYTHONPATH=. ./.venv-rl/bin/python \
 scripts/run_mininet.py \
 --agent-type random \
 --episodes 10 \

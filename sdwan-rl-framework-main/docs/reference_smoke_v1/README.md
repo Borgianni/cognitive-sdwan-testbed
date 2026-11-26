@@ -10,8 +10,11 @@ and redact personal paths in errors if needed.
 After reviewing inventory and unit tests, use an ISOLATED Linux host.
 Never use Mininet cleanup or root network mutation on a production
 network. The following are staged instructions, not a request to run
-all stages now. Start Ryu in its tested environment:
-  ryu-manager --ofp-tcp-listen-port 6653 --wsapi-port 8080 ryu_apps/switch_controller.py
+all stages now. See ../ubuntu24-environment.md for installation and
+network-guard limitations. Run the network-guard unit tests and verify
+existing bridge/interface inventory before any root run. Start Ryu in
+its tested environment:
+  .venv-ryu/bin/ryu-manager --ofp-listen-host 127.0.0.1 --ofp-tcp-listen-port 6653 --wsapi-host 127.0.0.1 --wsapi-port 8080 ryu_apps/switch_controller.py
 
 Run these only after environment and controller readiness have been
 checked. From the framework directory, use the exact Python executable

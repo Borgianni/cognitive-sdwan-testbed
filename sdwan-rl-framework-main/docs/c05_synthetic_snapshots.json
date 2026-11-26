@@ -1,0 +1,26 @@
+[
+  {
+    "lte": {
+      "delay": 50,
+      "packet_loss": 2,
+      "throughput": 10
+    },
+    "satellite": {
+      "delay": 120,
+      "packet_loss": 3,
+      "throughput": 10
+    }
+  },
+  {
+    "lte": {
+      "delay": 160,
+      "packet_loss": 9,
+      "throughput": 180
+    },
+    "satellite": {
+      "delay": 120,
+      "packet_loss": 3,
+      "throughput": 10
+    }
+  }
+]

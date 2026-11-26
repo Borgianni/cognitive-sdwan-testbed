@@ -43,7 +43,25 @@ class RLConfig:
     lte_delay_threshold_ms: float = 175.0
     sat_delay_threshold_ms: float = 240.0
 
+    # Bandwidth observation uses residual capacity fraction by default.
+    # legacy_throughput reproduces the public original implementation;
+    # positive_residual reproduces the mathematical predicate in the paper.
+    bandwidth_state_mode: str = "residual_threshold"
+    lte_residual_threshold: float = 0.20
+    sat_residual_threshold: float = 0.20
+
     def __post_init__(self):
+        if self.bandwidth_state_mode not in (
+            "residual_threshold", "legacy_throughput", "positive_residual"
+        ):
+            raise ValueError("Unknown bandwidth_state_mode")
+        for name in ("lte_capacity_mbps", "sat_capacity_mbps"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
+        for name in ("lte_residual_threshold", "sat_residual_threshold"):
+            if not 0.0 < getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must be in (0, 1]")
         for name in ("lte_delay_threshold_ms", "sat_delay_threshold_ms"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0.0:

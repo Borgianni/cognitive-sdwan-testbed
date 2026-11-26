@@ -23,7 +23,8 @@ class DelayStateTests(unittest.TestCase):
 
     def test_original_thresholds_do_not_detect_main_impairment(self):
         cfg = RLConfig(lte_delay_threshold_ms=700, sat_delay_threshold_ms=1200,
-                       lte_loss_threshold_pct=0, sat_loss_threshold_pct=0)
+                       lte_loss_threshold_pct=0, sat_loss_threshold_pct=0,
+                       bandwidth_state_mode="legacy_throughput")
         np.testing.assert_array_equal(self.state(cfg, 50, 120), [1, 1, 0, 0, 1, 1])
         np.testing.assert_array_equal(self.state(cfg, 300, 120), [1, 1, 0, 0, 1, 1])
 

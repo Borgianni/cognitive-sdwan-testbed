@@ -22,6 +22,30 @@ class SDWANEnv:
         self.lte = dict(delay=float('inf'), thr=0.0, loss=100.0)
         self.sat = dict(delay=float('inf'), thr=0.0, loss=100.0)
 
+        # Zero throughput is meaningful only after a measurement is received.
+        self._has_metrics = False
+
+    @staticmethod
+    def residual_capacity_fraction(throughput_mbps: float, capacity_mbps: float) -> float:
+        """Estimated unused fraction of configured interface capacity.
+
+        Invalid measurements return NaN, not a fully available link.
+        """
+        if (not math.isfinite(throughput_mbps) or throughput_mbps < 0.0
+                or not math.isfinite(capacity_mbps) or capacity_mbps <= 0.0):
+            return float("nan")
+        return max(0.0, min(1.0, (capacity_mbps - throughput_mbps) / capacity_mbps))
+
+    def _bandwidth_ok(self, throughput, capacity, threshold):
+        if not self._has_metrics or not math.isfinite(throughput) or throughput < 0.0:
+            return 0
+        if self.cfg.bandwidth_state_mode == "legacy_throughput":
+            return int(throughput > 0.0)
+        residual = self.residual_capacity_fraction(throughput, capacity)
+        if self.cfg.bandwidth_state_mode == "positive_residual":
+            return int(residual > 0.0)
+        return int(residual >= threshold)
+
     def make_state(self) -> State:
         # The ping probe reports end-to-end RTT, not one-way NetEm delay.
         lte_delay_ok = int(0.0 < self.lte['delay'] <= self.cfg.lte_delay_threshold_ms)
@@ -29,8 +53,10 @@ class SDWANEnv:
         # Loss is measured end-to-end and expressed as a percentage.
         lte_loss_ok  = int(0.0 <= self.lte['loss'] <= self.cfg.lte_loss_threshold_pct)
         sat_loss_ok  = int(0.0 <= self.sat['loss'] <= self.cfg.sat_loss_threshold_pct)
-        lte_bw_ok    = 1 if self.lte['thr'] > 0 else 0
-        sat_bw_ok    = 1 if self.sat['thr'] > 0 else 0
+        lte_bw_ok = self._bandwidth_ok(self.lte['thr'], self.cfg.lte_capacity_mbps,
+                                       self.cfg.lte_residual_threshold)
+        sat_bw_ok = self._bandwidth_ok(self.sat['thr'], self.cfg.sat_capacity_mbps,
+                                       self.cfg.sat_residual_threshold)
         return State(vec=np.array([lte_delay_ok, sat_delay_ok, lte_loss_ok, sat_loss_ok, lte_bw_ok, sat_bw_ok], dtype=np.float32))
 
     def reward(self, action: int) -> float:
@@ -63,3 +89,4 @@ class SDWANEnv:
         self.sat['delay'] = metrics['satellite']['delay']
         self.sat['thr']   = metrics['satellite']['throughput']
         self.sat['loss']  = metrics['satellite']['packet_loss']
+        self._has_metrics = True

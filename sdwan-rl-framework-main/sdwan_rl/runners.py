@@ -69,6 +69,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
           f"LEO={rl_cfg.sat_loss_threshold_pct}%")
     print(f"[INFO] RTT thresholds: LTE={rl_cfg.lte_delay_threshold_ms} ms, "
           f"LEO={rl_cfg.sat_delay_threshold_ms} ms")
+    print(f"[INFO] Bandwidth state: {rl_cfg.bandwidth_state_mode}; "
+          f"residual thresholds LTE={rl_cfg.lte_residual_threshold}, "
+          f"LEO={rl_cfg.sat_residual_threshold}")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     net.start()
@@ -165,6 +168,15 @@ if __name__ == "__main__":
     parser.add_argument("--sat-delay-threshold-ms", type=float,
                         default=RLConfig.sat_delay_threshold_ms,
                         help="LEO RTT observation threshold in milliseconds")
+    parser.add_argument("--bandwidth-state-mode",
+                        choices=["residual_threshold", "legacy_throughput", "positive_residual"],
+                        default=RLConfig.bandwidth_state_mode)
+    parser.add_argument("--lte-residual-threshold", type=float,
+                        default=RLConfig.lte_residual_threshold,
+                        help="Minimum LTE residual capacity fraction (0, 1]")
+    parser.add_argument("--sat-residual-threshold", type=float,
+                        default=RLConfig.sat_residual_threshold,
+                        help="Minimum LEO residual capacity fraction (0, 1]")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -175,5 +187,8 @@ if __name__ == "__main__":
     rl_cfg = RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
                       sat_loss_threshold_pct=args.sat_loss_threshold_pct,
                       lte_delay_threshold_ms=args.lte_delay_threshold_ms,
-                      sat_delay_threshold_ms=args.sat_delay_threshold_ms)
+                      sat_delay_threshold_ms=args.sat_delay_threshold_ms,
+                      bandwidth_state_mode=args.bandwidth_state_mode,
+                      lte_residual_threshold=args.lte_residual_threshold,
+                      sat_residual_threshold=args.sat_residual_threshold)
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli)

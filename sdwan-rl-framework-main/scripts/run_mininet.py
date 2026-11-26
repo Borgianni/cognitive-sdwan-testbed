@@ -17,6 +17,15 @@ if __name__ == "__main__":
     parser.add_argument("--sat-delay-threshold-ms", type=float,
                         default=RLConfig.sat_delay_threshold_ms,
                         help="LEO RTT observation threshold in milliseconds")
+    parser.add_argument("--bandwidth-state-mode",
+                        choices=["residual_threshold", "legacy_throughput", "positive_residual"],
+                        default=RLConfig.bandwidth_state_mode)
+    parser.add_argument("--lte-residual-threshold", type=float,
+                        default=RLConfig.lte_residual_threshold,
+                        help="Minimum LTE residual capacity fraction (0, 1]")
+    parser.add_argument("--sat-residual-threshold", type=float,
+                        default=RLConfig.sat_residual_threshold,
+                        help="Minimum LEO residual capacity fraction (0, 1]")
     args = parser.parse_args()
     
     run_experiment(
@@ -25,6 +34,9 @@ if __name__ == "__main__":
         rl_cfg=RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
                         sat_loss_threshold_pct=args.sat_loss_threshold_pct,
                         lte_delay_threshold_ms=args.lte_delay_threshold_ms,
-                        sat_delay_threshold_ms=args.sat_delay_threshold_ms),
+                        sat_delay_threshold_ms=args.sat_delay_threshold_ms,
+                        bandwidth_state_mode=args.bandwidth_state_mode,
+                        lte_residual_threshold=args.lte_residual_threshold,
+                        sat_residual_threshold=args.sat_residual_threshold),
         start_cli=args.cli
     )

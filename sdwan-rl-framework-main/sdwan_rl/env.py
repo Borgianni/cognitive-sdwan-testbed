@@ -23,8 +23,9 @@ class SDWANEnv:
         self.sat = dict(delay=float('inf'), thr=0.0, loss=100.0)
 
     def make_state(self) -> State:
-        lte_delay_ok = 1 if self.lte['delay'] < 700 else 0
-        sat_delay_ok = 1 if self.sat['delay'] < 1200 else 0
+        # The ping probe reports end-to-end RTT, not one-way NetEm delay.
+        lte_delay_ok = int(0.0 < self.lte['delay'] <= self.cfg.lte_delay_threshold_ms)
+        sat_delay_ok = int(0.0 < self.sat['delay'] <= self.cfg.sat_delay_threshold_ms)
         # Loss is measured end-to-end and expressed as a percentage.
         lte_loss_ok  = int(0.0 <= self.lte['loss'] <= self.cfg.lte_loss_threshold_pct)
         sat_loss_ok  = int(0.0 <= self.sat['loss'] <= self.cfg.sat_loss_threshold_pct)

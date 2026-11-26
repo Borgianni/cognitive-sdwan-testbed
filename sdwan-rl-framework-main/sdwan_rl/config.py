@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from typing import Tuple
 
@@ -37,7 +38,16 @@ class RLConfig:
     lte_loss_threshold_pct: float = 10.0
     sat_loss_threshold_pct: float = 10.0
 
+    # Provisional RTT observation thresholds in milliseconds (not SLA limits).
+    # Separate from threshold_delay_ms, which is used only by the reward.
+    lte_delay_threshold_ms: float = 175.0
+    sat_delay_threshold_ms: float = 240.0
+
     def __post_init__(self):
+        for name in ("lte_delay_threshold_ms", "sat_delay_threshold_ms"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
         for name in ("lte_loss_threshold_pct", "sat_loss_threshold_pct"):
             if not 0.0 <= getattr(self, name) <= 100.0:
                 raise ValueError(f"{name} must be between 0 and 100 percent")

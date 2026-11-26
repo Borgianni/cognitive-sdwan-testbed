@@ -67,6 +67,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     episode_count = exp.episodes if episodes is None else episodes
     print(f"[INFO] Packet-loss thresholds: LTE={rl_cfg.lte_loss_threshold_pct}%, "
           f"LEO={rl_cfg.sat_loss_threshold_pct}%")
+    print(f"[INFO] RTT thresholds: LTE={rl_cfg.lte_delay_threshold_ms} ms, "
+          f"LEO={rl_cfg.sat_delay_threshold_ms} ms")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     net.start()
@@ -157,6 +159,12 @@ if __name__ == "__main__":
                         help="LTE packet-loss observation threshold in percent")
     parser.add_argument("--sat-loss-threshold-pct", type=float, default=10.0,
                         help="LEO packet-loss observation threshold in percent")
+    parser.add_argument("--lte-delay-threshold-ms", type=float,
+                        default=RLConfig.lte_delay_threshold_ms,
+                        help="LTE RTT observation threshold in milliseconds")
+    parser.add_argument("--sat-delay-threshold-ms", type=float,
+                        default=RLConfig.sat_delay_threshold_ms,
+                        help="LEO RTT observation threshold in milliseconds")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -165,5 +173,7 @@ if __name__ == "__main__":
         exp_cfg.episodes = args.episodes
 
     rl_cfg = RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
-                      sat_loss_threshold_pct=args.sat_loss_threshold_pct)
+                      sat_loss_threshold_pct=args.sat_loss_threshold_pct,
+                      lte_delay_threshold_ms=args.lte_delay_threshold_ms,
+                      sat_delay_threshold_ms=args.sat_delay_threshold_ms)
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli)

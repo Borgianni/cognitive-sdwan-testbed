@@ -1,7 +1,5 @@
-from mininet.net import Mininet
-from mininet.node import OVSSwitch, RemoteController
 from mininet.cli import CLI
-from mininet.clean import cleanup
+from .network_guard import exclusive_run, prepare_network, start_network, stop_network
 
 import time
 import argparse
@@ -40,6 +38,7 @@ HEURISTIC_AGENTS = ("ewma", "greedy_utility", "random")
 # ----------------------------------------------------------------------
 # Experiment runner with configurable agent
 # ----------------------------------------------------------------------
+@exclusive_run
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
                    mode='online', checkpoint=None, trace=None,
                    split='diagnostic', manifest_path=None, scenario_id=None, seed=None,
@@ -168,9 +167,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                             agent.configuration if agent_type == "random" else None,
                             "training_protocol": training_meta.get("training_protocol") if training_meta else None,
                             "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
-    topo = SDWANTopo()
-    net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
-    net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
+    net = None
     api = ControllerAPI()
     runtime, collector = None, None
     last_trace_write_s, last_tick_start = 0.0, None
@@ -178,7 +175,8 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     current_ep, current_tick = None, None
     latest_measurement = None
     try:
-        net.start()
+        net = prepare_network(SDWANTopo())
+        start_network(net)
         api.wait_ready()
         runtime = ScenarioRuntime(net, network_scenario)
         collector = TelemetryCollector(net, telemetry_cfg)
@@ -339,9 +337,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 if runtime is not None:
                     runtime.close()
         finally:
-            api.close()
-            net.stop()
-            cleanup()
+            try:
+                api.close()
+            finally:
+                try:
+                    stop_network(net)
+                except Exception as exc:
+                    if trace:
+                        append_trace(trace, {"kind": "failed", "error": f"Network teardown: {exc}"})
+                    raise
 
 
 if __name__ == "__main__":

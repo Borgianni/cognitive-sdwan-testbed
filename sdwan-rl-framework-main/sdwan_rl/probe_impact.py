@@ -59,10 +59,11 @@ def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801, cfg=None, 
             "status": "planned_not_executed"}
 
 
+from .network_guard import exclusive_run, prepare_network, start_network, stop_network
+
+
+@exclusive_run
 def run(manifest, scenario_id, seed, action, probes, cfg, trace):
-    from mininet.net import Mininet
-    from mininet.node import OVSSwitch, RemoteController
-    from mininet.clean import cleanup
     from .topology import SDWANTopo
     from .controller_api import ControllerAPI
     from .scenario_runtime import ScenarioRuntime
@@ -76,12 +77,12 @@ def run(manifest, scenario_id, seed, action, probes, cfg, trace):
     run_id = uuid.uuid4().hex
     append_trace(trace, {"kind": "probe_impact", "run_id": run_id, "protocol": protocol,
                         "seed": seed, "action": action, "probes": probes, "telemetry_config": asdict(cfg)}, mode="x")
-    net = Mininet(topo=SDWANTopo(), switch=OVSSwitch, controller=None, autoStaticArp=True)
-    net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
+    net = None
     api = ControllerAPI()
     runtime = collector = None
     try:
-        net.start()
+        net = prepare_network(SDWANTopo())
+        start_network(net)
         api.wait_ready()
         runtime = ScenarioRuntime(net, scenario)
         collector = TelemetryCollector(net, cfg, probes=probes)
@@ -110,9 +111,14 @@ def run(manifest, scenario_id, seed, action, probes, cfg, trace):
                 if runtime is not None:
                     runtime.close()
         finally:
-            api.close()
-            net.stop()
-            cleanup()
+            try:
+                api.close()
+            finally:
+                try:
+                    stop_network(net)
+                except Exception as exc:
+                    append_trace(trace, {"kind": "failed", "error": f"Network teardown: {exc}"})
+                    raise
 
 
 def read_run(path):

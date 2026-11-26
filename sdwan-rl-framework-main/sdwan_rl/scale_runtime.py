@@ -21,9 +21,9 @@ WORKER = Path(__file__).with_name("udp_measure.py").resolve()
 
 def create_network(graph):
     from mininet.topo import Topo
-    from mininet.net import Mininet
     from mininet.link import TCLink
-    from mininet.node import OVSSwitch, RemoteController
+    from mininet.node import OVSSwitch
+    from .network_guard import prepare_network
 
     class ScaleTopo(Topo):
         def build(self):
@@ -44,9 +44,7 @@ def create_network(graph):
                              loss=edge["loss_pct"], jitter=f'{edge["jitter_ms"]}ms',
                              max_queue_size=edge["max_queue"], use_htb=True)
 
-    net = Mininet(topo=ScaleTopo(), switch=OVSSwitch, controller=None, autoStaticArp=True)
-    net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
-    return net
+    return prepare_network(ScaleTopo())
 
 
 class ScaleAPI:

@@ -22,6 +22,10 @@ def read_scenario(path):
         return validate_scenario(json.load(stream))
 
 
+from .network_guard import exclusive_run, start_network, stop_network
+
+
+@exclusive_run
 def run(scenario, agent_type, seed, trace, cfg, telemetry_cfg, checkpoint=None,
         secondary="off", fixed_action=None):
     validate_scenario(scenario)
@@ -70,7 +74,6 @@ def run(scenario, agent_type, seed, trace, cfg, telemetry_cfg, checkpoint=None,
                         "fixed_action": fixed_action, "initial_weights_sha256": initial,
                         "training_metadata": training_meta, "checkpoint": checkpoint,
                         "runtime_environment": runtime_environment()}, mode="x")
-    from mininet.clean import cleanup
     from .scale_runtime import create_network, ScaleAPI, ScaleRuntime
 
     net, runtime = None, None
@@ -80,7 +83,7 @@ def run(scenario, agent_type, seed, trace, cfg, telemetry_cfg, checkpoint=None,
     measurement = None
     try:
         net = create_network(graph)
-        net.start()
+        start_network(net)
         api.wait_ready()
         runtime = ScaleRuntime(net, scenario, telemetry_cfg, secondary, api)
         for ep in range(1, scenario["episodes"] + 1):
@@ -165,10 +168,14 @@ def run(scenario, agent_type, seed, trace, cfg, telemetry_cfg, checkpoint=None,
             if runtime is not None:
                 runtime.close()
         finally:
-            api.close()
-            if net is not None:
-                net.stop()
-                cleanup()
+            try:
+                api.close()
+            finally:
+                try:
+                    stop_network(net)
+                except Exception as exc:
+                    append_trace(trace, {"kind": "failed", "error": f"Network teardown: {exc}"})
+                    raise
 
 
 def main():

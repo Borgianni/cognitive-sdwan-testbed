@@ -20,6 +20,7 @@ from .metrics import measure_link_tuple
 from .controller_api import ControllerAPI
 from .env import SDWANEnv, A_LTE, A_SAT
 from .config import ExperimentConfig, RLConfig
+from .reward_cli import add_reward_arguments, reward_kwargs
 from .agents.ewma import EWMALatencyAgent
 from .agents.utility import GreedyUtilityAgent
 
@@ -105,6 +106,11 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
           f"LEO={rl_cfg.sat_residual_threshold}")
     print(f"[INFO] State representation: {rl_cfg.state_representation}; "
           f"continuous RTT scale={rl_cfg.continuous_delay_scale_ms} ms")
+    print(f"[INFO] Reward: {rl_cfg.reward_mode}; RTT reference={rl_cfg.threshold_delay_ms} ms; "
+          f"bandwidth reference={rl_cfg.reward_bandwidth_ref_mbps} Mbps; "
+          f"loss reference={rl_cfg.reward_loss_ref_fraction}; "
+          f"weights(delay,loss,bw,cost)={(rl_cfg.w_b, rl_cfg.w_a, rl_cfg.w_c, rl_cfg.w_d)}; "
+          f"cost indices={(rl_cfg.lte_cost_index, rl_cfg.sat_cost_index)}")
     env = SDWANEnv(cfg=rl_cfg)
 
     # Seed before constructing a fresh agent. Scenario-generation RNG is separate.
@@ -174,6 +180,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             env.reset_metrics()
             state = env.make_state().vec
             decision_metrics = None
+            episode_reward = 0.0
             if agent_type in HEURISTIC_AGENTS:
                 agent.reset()
 
@@ -202,13 +209,19 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                     "episode": {"episode number": ep, "tick": t, "chosen link": int(action)}
                 }
 
-                # 3) Send to controller (optional, for compatibility)
-                api.send_metrics(metrics)
-                chosen = api.get_link_decision()  # not actually used for forwarding here
-
-                # 4) Update environment and compute reward
+                # 3) Compute reward once; publish the same values used for learning.
                 env.update_from_metrics(metrics)
-                r = env.reward(action)
+                terms = env.reward_terms(action)
+                r = terms["reward"]
+                episode_reward += r
+                metrics["lte"]["cost_index"] = env.cost_index(A_LTE)
+                metrics["satellite"]["cost_index"] = env.cost_index(A_SAT)
+                metrics["episode"]["reward"] = r
+                metrics["episode"]["total reward"] = episode_reward  # cumulative within episode
+
+                # 4) Send to controller (forwarding validation is still pending).
+                api.send_metrics(metrics)
+                chosen = api.get_link_decision()
                 done = (t == exp.ticks_per_episode - 1)
 
                 # 5) Next state
@@ -225,6 +238,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                         "heuristic_details": heuristic_details,
                         "exploratory": bool(exploratory), "epsilon": eps_before,
                         "measurement_metrics": metrics, "reward": r,
+                        "reward_terms": terms,
                         "next_state": next_state.tolist(),
                         "controller_reported_choice": chosen,
                         "scenario_conditions": conditions,
@@ -310,6 +324,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     parser.add_argument("--ewma-alpha", type=float, default=0.3,
                         help="Weight on the newest RTT sample for EWMA")
+    add_reward_arguments(parser)
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -323,7 +338,8 @@ if __name__ == "__main__":
                       lte_residual_threshold=args.lte_residual_threshold,
                       sat_residual_threshold=args.sat_residual_threshold,
                       state_representation=args.state_representation,
-                      continuous_delay_scale_ms=args.continuous_delay_scale_ms)
+                      continuous_delay_scale_ms=args.continuous_delay_scale_ms,
+                      **reward_kwargs(args))
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
                    split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,

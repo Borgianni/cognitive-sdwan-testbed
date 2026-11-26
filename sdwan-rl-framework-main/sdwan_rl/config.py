@@ -30,7 +30,7 @@ class RLConfig:
     w_b: float = 2.0   # delay term
     w_c: float = 2.0   # available bw
     w_d: float = 0.2   # cost penalty
-    threshold_delay_ms: int = 140
+    threshold_delay_ms: float = 140.0
     lte_capacity_mbps: float = 250.0
     sat_capacity_mbps: float = 200.0
     # Observation thresholds in percentage points (10.0 means 10%).
@@ -54,7 +54,44 @@ class RLConfig:
     state_representation: str = "binary"
     continuous_delay_scale_ms: float = 100.0
 
+    # Explicit dimensionless reward ratios, preserving the historical scale.
+    reward_mode: str = "normalized"
+    reward_bandwidth_ref_mbps: float = 1.0
+    reward_loss_ref_fraction: float = 0.01
+    # Synthetic dimensionless preference indices, not monetary/energy costs.
+    lte_cost_index: float = 7.0
+    sat_cost_index: float = 20.0
+
+    @classmethod
+    def from_record(cls, fields):
+        """Old checkpoints/traces predate explicit reward semantics."""
+        fields = dict(fields)
+        reward_fields = {"reward_mode", "reward_bandwidth_ref_mbps",
+                         "reward_loss_ref_fraction", "lte_cost_index", "sat_cost_index"}
+        present = reward_fields.intersection(fields)
+        if not present:
+            fields["reward_mode"] = "legacy"
+        elif present != reward_fields:
+            raise ValueError("Incomplete recorded reward configuration")
+        return cls(**fields)
+
     def __post_init__(self):
+        if self.reward_mode not in ("normalized", "legacy"):
+            raise ValueError("Unknown reward mode")
+        for name in ("threshold_delay_ms", "reward_bandwidth_ref_mbps",
+                     "lte_cost_index", "sat_cost_index"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        ref = self.reward_loss_ref_fraction
+        if isinstance(ref, bool) or not math.isfinite(ref) or not 0 < ref <= 1:
+            raise ValueError("reward_loss_ref_fraction must be in (0, 1]")
+        for name in ("w_a", "w_b", "w_c", "w_d"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if not any(getattr(self, name) > 0 for name in ("w_a", "w_b", "w_c", "w_d")):
+            raise ValueError("At least one reward weight must be positive")
         if self.state_representation not in ("binary", "continuous"):
             raise ValueError("Unknown state_representation")
         if (not math.isfinite(self.continuous_delay_scale_ms)

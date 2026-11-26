@@ -55,7 +55,7 @@ def audit_trace(path):
         raise ValueError("Expected a formal held-out test trace")
     if resolve_run(protocol["manifest"], protocol["scenario_id"], "held_out_test", mode) != protocol:
         raise ValueError("Invalid scenario provenance")
-    cfg = RLConfig(**header["rl_config"])
+    cfg = RLConfig.from_record(header["rl_config"])
     episodes, ticks = (protocol["scenario"][k] for k in ("episodes", "ticks_per_episode"))
     if header.get("episode_count") != episodes or len(rows) != episodes * ticks + 2:
         raise ValueError("Trace does not match declared tick budget")

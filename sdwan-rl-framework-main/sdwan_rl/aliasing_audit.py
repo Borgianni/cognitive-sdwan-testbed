@@ -110,7 +110,7 @@ def snapshots_from_trace(path, required_split=None):
         protocol = rows[0].get("protocol") or {}
         if protocol.get("split") != required_split:
             raise ValueError(f"Trace must originate from the {required_split} split")
-    cfg = RLConfig(**rows[0]["rl_config"])
+    cfg = RLConfig.from_record(rows[0]["rl_config"])
     snapshots = []
     skipped = 0
     for row in rows[1:-1]:

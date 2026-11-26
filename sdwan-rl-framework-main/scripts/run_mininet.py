@@ -1,6 +1,7 @@
 import argparse
 from sdwan_rl.runners import run_experiment
 from sdwan_rl.config import RLConfig
+from sdwan_rl.reward_cli import add_reward_arguments, reward_kwargs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -42,6 +43,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     parser.add_argument("--ewma-alpha", type=float, default=0.3,
                         help="Weight on the newest RTT sample for EWMA")
+    add_reward_arguments(parser)
     args = parser.parse_args()
     
     run_experiment(
@@ -55,7 +57,8 @@ if __name__ == "__main__":
                         lte_residual_threshold=args.lte_residual_threshold,
                         sat_residual_threshold=args.sat_residual_threshold,
                         state_representation=args.state_representation,
-                        continuous_delay_scale_ms=args.continuous_delay_scale_ms),
+                        continuous_delay_scale_ms=args.continuous_delay_scale_ms,
+                        **reward_kwargs(args)),
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
         seed=args.seed, ewma_alpha=args.ewma_alpha,

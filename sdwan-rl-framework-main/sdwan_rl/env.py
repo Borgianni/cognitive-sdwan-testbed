@@ -88,28 +88,52 @@ class SDWANEnv:
                                        self.cfg.sat_residual_threshold)
         return State(vec=np.array([lte_delay_ok, sat_delay_ok, lte_loss_ok, sat_loss_ok, lte_bw_ok, sat_bw_ok], dtype=np.float32))
 
-    def reward(self, action: int) -> float:
-        # Available bandwidth = capacity - throughput (clipped)
-        ab_lte = max(self.cfg.lte_capacity_mbps - self.lte['thr'], 1e-4)
-        ab_sat = max(self.cfg.sat_capacity_mbps - self.sat['thr'], 1e-4)
+    def cost_index(self, action: int) -> float:
+        if action not in (A_LTE, A_SAT):
+            raise ValueError("Unknown tunnel action")
+        return float(self.cfg.sat_cost_index if action == A_SAT else self.cfg.lte_cost_index)
 
-        # avoid log(0)
-        d_lte = max(self.lte['delay'], 1e-4)
-        d_sat = max(self.sat['delay'], 1e-4)
-        l_lte = max(self.lte['loss'],  1e-4)
-        l_sat = max(self.sat['loss'],  1e-4)
+    def reward_terms(self, action: int) -> Dict:
+        """Shared scalar reward and signed components for the chosen tunnel.
 
-        if action == A_SAT:
-            R = ( self.cfg.w_b * math.log(self.cfg.threshold_delay_ms / d_sat)
-                - self.cfg.w_a * (1 + math.log(l_sat + 1))
-                + self.cfg.w_c * math.log(ab_sat + 1)
-                - self.cfg.w_d * 20)  # satellite cost (matches your controller’s cost map)
+        Canonical telemetry: RTT ms, loss percent, throughput Mbps.
+        Normalized mode fails closed for detectably invalid selected metrics.
+        Legacy mode preserves the original numerical floors and formula at
+        the historical parameters; it is only a reproduction comparator.
+        """
+        cost = self.cost_index(action)
+        m = self.sat if action == A_SAT else self.lte
+        capacity = self.cfg.sat_capacity_mbps if action == A_SAT else self.cfg.lte_capacity_mbps
+        d, loss, throughput = m["delay"], m["loss"], m["thr"]
+        cfg = self.cfg
+        if cfg.reward_mode == "legacy":
+            delay_score = math.log(cfg.threshold_delay_ms / max(d, 1e-4))
+            loss_score = 1 + math.log(max(loss, 1e-4) + 1)
+            residual = max(capacity - throughput, 1e-4)
+            bandwidth_score = math.log(residual + 1)
         else:
-            R = ( self.cfg.w_b * math.log(self.cfg.threshold_delay_ms / d_lte)
-                - self.cfg.w_a * (1 + math.log(l_lte + 1))
-                + self.cfg.w_c * math.log(ab_lte + 1)
-                - self.cfg.w_d * 7)   # LTE cost
-        return float(R)
+            if (not self._has_metrics or not all(math.isfinite(v) for v in (d, loss, throughput))
+                    or d <= 0 or not 0 <= loss <= 100 or throughput < 0):
+                raise ValueError("Invalid selected-tunnel telemetry for normalized reward")
+            residual = max(capacity - throughput, 0.0)
+            delay_score = math.log(cfg.threshold_delay_ms) - math.log(d)
+            loss_score = 1 + math.log1p((loss / 100.0) / cfg.reward_loss_ref_fraction)
+            bandwidth_score = math.log1p(residual / cfg.reward_bandwidth_ref_mbps)
+        delay_term = cfg.w_b * delay_score
+        loss_term = -cfg.w_a * loss_score
+        bandwidth_term = cfg.w_c * bandwidth_score
+        cost_term = -cfg.w_d * cost
+        qos = delay_term + loss_term + bandwidth_term
+        reward = qos + cost_term
+        if cfg.reward_mode == "normalized" and not math.isfinite(reward):
+            raise ValueError("Non-finite normalized reward")
+        return {"delay_term": float(delay_term), "loss_term": float(loss_term),
+                "bandwidth_term": float(bandwidth_term), "cost_term": float(cost_term),
+                "qos_utility": float(qos), "cost_index": cost,
+                "residual_mbps": float(residual), "reward": float(reward)}
+
+    def reward(self, action: int) -> float:
+        return self.reward_terms(action)["reward"]
 
     def update_from_metrics(self, metrics: Dict) -> None:
         self.lte['delay'] = metrics['lte']['delay']

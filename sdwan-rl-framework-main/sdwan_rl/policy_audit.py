@@ -77,7 +77,7 @@ def checkpoint_config(path):
             raise ValueError("Checkpoint is missing observation configuration")
     else:
         raise ValueError("Unsupported observation schema")
-    return RLConfig(**fields), meta
+    return RLConfig.from_record(fields), meta
 
 
 def load_frozen(agent, cfg, path, protocol=None, run_seed=None):

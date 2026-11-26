@@ -122,9 +122,10 @@ class SDWANController(app_manager.RyuApp):
         print("LTE - Delay:", lte_delay, "Throughput:", lte_throughput, "Packet Loss:", lte_packet_loss)
         print("Satellite - Delay:", satellite_delay, "Throughput:", satellite_throughput, "Packet Loss:", satellite_packet_loss)
         print("episode number:", episode, "reward:", reward, "total reward:", total_reward, 'action', action)
-        # Define costs
-        cost_lte = self.get_link_cost('lte')
-        cost_satellite = self.get_link_cost('satellite')
+        # The runner owns reward/cost configuration. Missing fields in old
+        # clients are explicitly missing, not an independent hard-coded map.
+        cost_lte = metrics.get('lte', {}).get('cost_index')
+        cost_satellite = metrics.get('satellite', {}).get('cost_index')
         
 
         if int(action) == 1:
@@ -229,14 +230,6 @@ class SDWANController(app_manager.RyuApp):
     def get_link_decision(self):
         return self.current_link
 
-
-    def get_link_cost(self,link_type):
-        """Return the cost associated with the link type."""
-        costs = {
-        'lte': 5,
-        'satellite': 20
-    }
-        return costs.get(link_type, 0)  # Return 0 if the link_type is not found
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):

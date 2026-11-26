@@ -45,7 +45,7 @@ def read_run(path, split):
     if resolve_run(protocol["manifest"], protocol["scenario_id"], split, mode) != protocol:
         raise ValueError(f"{path}: invalid protocol provenance")
     # Validate the recorded RL configuration, including observation semantics.
-    cfg = RLConfig(**header["rl_config"])
+    cfg = RLConfig.from_record(header["rl_config"])
     scenario = protocol["scenario"]
     episodes, ticks = scenario["episodes"], scenario["ticks_per_episode"]
     if header.get("episode_count") != episodes or len(rows) != episodes * ticks + 2:

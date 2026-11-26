@@ -90,8 +90,11 @@ def make_scenario(case, split, episodes=12, ticks=10):
                 "edges": [e["id"]], "port": 6100 + i, "rate_mbps": rate}
                for i, e in enumerate(graph["edges"]) if e["a"] == 1 and e["b"] == 2]
     if case == "triangle3":
+        # Deliberately nontrivial shared load, still an offered payload
+        # rate (not a measured rate or a guarantee of queue congestion).
+        shared_rate = {"train": 90, "calibration": 120, "held_out_test": 150}[split]
         traffic.append({"id": "load_cb", "src": 3, "dst": 2, "edges": ["cb"],
-                        "port": 6190, "rate_mbps": rate * 2})
+                        "port": 6190, "rate_mbps": shared_rate})
     return {"schema": 1, "id": f"{case}_{split}", "split": split, "graph": graph,
             "episodes": episodes, "ticks_per_episode": ticks, "traffic": traffic,
             "events": [{"edge": edge, "start_episode": start, "end_episode": end,

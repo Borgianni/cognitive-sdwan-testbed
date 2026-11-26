@@ -67,10 +67,13 @@ def validate_measurement(scenario, action, secondary, m):
         raise ValueError("Primary delivery exceeds route evidence")
     if secondary == "rr":
         counts = m["rr_dispatched"]
-        if (len(counts) != len(graph["paths"]) or any(type(n) is not int or n < 0 for n in counts)
-                or sum(counts) <= 0 or max(counts) - min(counts) > 1):
-            raise ValueError("Invalid RR dispatch evidence")
-    elif m["rr_dispatched"] is not None:
+        received = m["rr_path_egress_matches"]
+        if (len(counts) != len(graph["paths"]) or len(received) != len(counts)
+                or any(type(n) is not int or n < 0 for n in counts + received)
+                or sum(counts) <= 0 or max(counts) - min(counts) > 1
+                or any(a > b for a, b in zip(received, counts))):
+            raise ValueError("Invalid RR dispatch/receive evidence")
+    elif m["rr_dispatched"] is not None or m["rr_path_egress_matches"] is not None:
         raise ValueError("Unexpected RR dispatch evidence")
 
 
@@ -172,6 +175,8 @@ def audit(path):
             "secondary_qos": stream_summary(measurements, "secondary") if header["secondary"] != "off" else None,
             "rr_dispatched_by_path": [sum(m["rr_dispatched"][i] for m in measurements)
                                       for i in range(env.n)] if header["secondary"] == "rr" else None,
+            "rr_path_egress_matches": [sum(m["rr_path_egress_matches"][i] for m in measurements)
+                                        for i in range(env.n)] if header["secondary"] == "rr" else None,
             "mean_reward": fmean(rewards) if rewards else None,
             "reward_coverage": len(rewards)/len(records),
             "mean_selected_cost_index": fmean(costs),
@@ -195,8 +200,8 @@ def benchmark(reports, cases, seeds, agents):
     for seed in seeds:
         validate_run_seed(seed, required=True)
     expected = {(case, seed, agent) for case in cases for seed in seeds for agent in agents}
-    observed, signatures = {}, {}
-    common = None
+    observed, signatures, train_signatures = {}, {}, {}
+    common, training_budget = None, None
     for r in reports:
         scenario = r["scenario"]
         case = scenario["graph"]["case"]
@@ -212,6 +217,15 @@ def benchmark(reports, cases, seeds, agents):
             common = settings
         elif common != settings:
             raise ValueError("Cross-case configuration/budget differs")
+        if r["agent"] == "dqn":
+            train = r["training_metadata"]["training_scenario"]
+            if train_signatures.setdefault(case, digest(train)) != digest(train):
+                raise ValueError("Different training scenarios within a case")
+            budget = (train["episodes"], train["ticks_per_episode"])
+            if training_budget is None:
+                training_budget = budget
+            elif training_budget != budget:
+                raise ValueError("Different training budgets across cases")
         observed[key] = r
     if set(observed) != expected:
         raise ValueError("Incomplete declared scalability matrix")

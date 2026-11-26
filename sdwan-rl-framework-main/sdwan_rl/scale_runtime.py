@@ -276,14 +276,29 @@ class ScaleRuntime:
                        and r["match"]["in_port"] == ACCESS]
             egress = [r for r in rules if r["site"] == 2 and r["match"].get("udp_dst") == port
                       and r["out_port"] == ACCESS]
+            reverse_egress = [r for r in rules if r["site"] == 1 and r["match"].get("udp_src") == port
+                              and r["out_port"] == ACCESS]
             if (len(ingress) != 1 or deltas[str(ingress[0]["cookie"])]["packets"] <= 0
-                    or samples[name]["received_packets"] > sum(deltas[str(r["cookie"])]["packets"] for r in egress)):
+                    or samples[name]["received_packets"] > sum(deltas[str(r["cookie"])]["packets"] for r in egress)
+                    or samples[name]["echo_received_packets"] > sum(deltas[str(r["cookie"])]["packets"] for r in reverse_egress)):
                 raise RuntimeError("Traffic does not match the expected ingress/egress evidence")
-        rr = None
+        rr, rr_egress = None, None
         if rr_before is not None:
             rr = [b - a for a, b in zip(rr_before, self.api.rr_stats())]
-            if min(rr) < 0 or sum(rr) <= 0 or max(rr) - min(rr) > 1:
-                raise RuntimeError("RR packet dispatch counters are inconsistent")
+            origin = [r for r in rules if r["site"] == 1 and r["match"].get("udp_dst") == SECONDARY_PORT
+                      and r["out_port"] == "controller"]
+            rr_egress = []
+            for path in paths:
+                incoming = walk(self.graph, path["edges"], 1, 2)[-1][1]
+                final = [r for r in rules if r["site"] == 2 and r["match"].get("udp_dst") == SECONDARY_PORT
+                         and r["match"]["in_port"] == incoming]
+                if len(final) != 1:
+                    raise RuntimeError("Missing unique RR path receive rule")
+                rr_egress.append(deltas[str(final[0]["cookie"])]["packets"])
+            if (len(origin) != 1 or min(rr) < 0 or sum(rr) <= 0 or max(rr) - min(rr) > 1
+                    or sum(rr) > deltas[str(origin[0]["cookie"])]["packets"]
+                    or any(received > dispatched for received, dispatched in zip(rr_egress, rr))):
+                raise RuntimeError("RR dispatch/receive counters are inconsistent")
         metrics = {}
         for path in paths:
             name = path["id"]
@@ -296,7 +311,7 @@ class ScaleRuntime:
         match_bytes = sum(deltas[str(r["cookie"])]["bytes"] for r in rules
                           if r["match"]["in_port"] == ACCESS and
                           (r["match"].get("udp_dst") in probe_ports or r["match"].get("udp_src") in probe_ports))
-        return {"metrics": metrics, "streams": samples, "flow_deltas": deltas, "rr_dispatched": rr,
+        return {"metrics": metrics, "streams": samples, "flow_deltas": deltas, "rr_dispatched": rr, "rr_path_egress_matches": rr_egress,
                 "edge_tx_mbps": rates, "counters_before": counters0, "counters_after": counters1,
                 "window_start_s": start, "window_end_s": deadline,
                 "probe_payload_bytes_both_directions": probe_bytes,

@@ -20,7 +20,7 @@ It implements a continuous **Perception → Learning → Decision → Action** c
 * Configurable link degradation profiles
 * Automatic logging of network and learning metrics
 * LTE + LEO satellite dual-tunnel scenario
-* Configurable experiment manifests; current verified design scope is dual-site/dual-tunnel
+* Configurable experiment manifests; main dual-site/dual-tunnel benchmark plus a separate candidate 2/3/4-path, three-site scalability extension (integration validation pending)
 * Open-source and research-oriented design
 
 ---
@@ -344,6 +344,26 @@ To ensure reproducibility:
 * The entire framework is version controlled
 
 ---
+
+## Bounded scalability and modeling scope
+
+The main dual-tunnel runner retains the earlier experiment protocol.
+A separate scalability study uses `sdwan_rl.scale_runner`, `scale_cases.py`,
+`scale_runtime.py`, `scale_policy.py`, `scale_audit.py` and
+`ryu_apps/scale_controller.py`. See
+[study instructions](docs/revision-r1-c29-c34-study.md).
+It provides two-site parallel2/3/4 cases and a three-site transit case,
+with independent competing UDP flows. A fresh DQN is required for each
+ordered path catalog; checkpoints are not transferable across N.
+Ordinary competing flows are pinned; packet-level round robin is an
+optional calibration diagnostic with sequence-order measurements.
+No real-network scalability results have yet been verified.
+
+The testbed abstracts pre-provisioned SD-WAN logical overlay paths and
+policy steering using Mininet/TC and OpenFlow. It does not implement
+GRE/IPsec/VXLAN establishment, encryption, vendor SLA protocols, or
+LTE radio/satellite orbital dynamics. LTE/LEO-aware labels denote
+synthetic technology-inspired profiles, not validated physical models.
 
 ## Research Applications
 

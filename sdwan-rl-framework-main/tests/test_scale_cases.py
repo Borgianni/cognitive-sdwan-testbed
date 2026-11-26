@@ -35,6 +35,7 @@ class ScaleCaseTests(unittest.TestCase):
         scenario = make_scenario("triangle3", "held_out_test")
         load = next(r for r in scenario["traffic"] if r["src"] == 3)
         self.assertIn(load["edges"][0], path["edges"])
+        self.assertEqual(load["rate_mbps"], 150)
         with self.assertRaises(ValueError):
             walk(graph, ["ac", "ac", "p1"], 1, 2)
 

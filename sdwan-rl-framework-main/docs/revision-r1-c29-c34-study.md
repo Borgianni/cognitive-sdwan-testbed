@@ -20,7 +20,10 @@ the same seed/checkpoint and --scenario scale_test.json; run greedy
 with the same file/seed but --agent greedy and no checkpoint.
 Random is optional. Repeat parallel2, parallel3, parallel4, triangle3.
 One common continuous encoder/reward/telemetry configuration for
-all cases. Train a fresh network per case and seed. Training and
+all cases. The C->B shared flow offers 90/120/150 Mbps in
+train/calibration/test respectively, against a nominal 180 Mbps
+segment. This is an offered rate, not a guarantee of congestion
+or achieved throughput; measure actual TX and receiver counters. Train a fresh network per case and seed. Training and
 test budgets above are illustrative: lock actual budget after
 timing/calibration, and preserve all failures. Same seed labels
 do not guarantee identical Linux/NetEm stochastic realizations.

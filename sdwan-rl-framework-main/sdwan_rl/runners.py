@@ -10,7 +10,7 @@ import random
 from dataclasses import asdict
 from pathlib import Path
 
-from .policy_audit import append_trace, load_frozen, save_checkpoint, weights_digest, metadata_path
+from .policy_audit import append_trace, load_frozen, save_checkpoint, weights_digest, metadata_path, validate_run_seed
 from .experiment_protocol import read_manifest, resolve_run
 from .scenario_runtime import ScenarioRuntime
 from .scenario_profiles import nominal_profiles
@@ -67,13 +67,14 @@ def set_degradation(net, episode: int, ranges: Tuple[Tuple[int, int], ...]):
 # ----------------------------------------------------------------------
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
                    mode='online', checkpoint=None, trace=None,
-                   split='diagnostic', manifest_path=None, scenario_id=None):
+                   split='diagnostic', manifest_path=None, scenario_id=None, seed=None):
     """
     agent_type: 'dqn' or 'random'
     """
     manifest = read_manifest(manifest_path) if manifest_path is not None else None
     protocol = resolve_run(manifest, scenario_id, split, mode)
     scenario = None
+    validate_run_seed(seed, required=split != "diagnostic")
     if split != "diagnostic":
         if agent_type != "dqn" or not checkpoint or not trace:
             raise ValueError("Formal runs require DQN, checkpoint and trace")
@@ -118,6 +119,15 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
           f"continuous RTT scale={rl_cfg.continuous_delay_scale_ms} ms")
     env = SDWANEnv(cfg=rl_cfg)
 
+    # Seed before constructing a fresh agent. Scenario-generation RNG is separate.
+    if seed is not None:
+        if agent_type == "dqn":
+            import tensorflow as tf
+            tf.keras.utils.set_random_seed(seed)
+        else:
+            random.seed(seed)
+    print(f"[INFO] Run seed: {seed}")
+
     # --- Agent instantiation ---
     if agent_type == 'dqn':
         agent = DQNAgent(state_size=6, action_size=2,
@@ -132,14 +142,18 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         raise ValueError(f"Unknown agent_type: {agent_type} (use 'dqn' or 'random')")
 
     initial_weights = None
+    training_meta = None
     if mode == "frozen":
-        load_frozen(agent, rl_cfg, checkpoint, protocol=protocol)
+        training_meta = load_frozen(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
         initial_weights = weights_digest(agent)
     if trace:
         append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
                             "initial_weights_sha256": weights_digest(agent),
                             "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
-                            "episode_count": episode_count, "protocol": protocol}, mode="x")
+                            "episode_count": episode_count, "protocol": protocol,
+                            "agent_type": agent_type, "run_seed": seed,
+                            "training_protocol": training_meta.get("training_protocol") if training_meta else None,
+                            "training_seed": training_meta.get("training_seed") if training_meta else None}, mode="x")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     api = ControllerAPI()
@@ -223,7 +237,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             if weights_digest(agent) != initial_weights or agent.eps != 0 or len(agent.memory):
                 raise RuntimeError("Frozen evaluation changed weights, epsilon or replay")
         if mode == "online" and checkpoint:
-            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol)
+            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol, run_seed=seed)
         if trace:
             append_trace(trace, {"kind": "complete", "weights_sha256": weights_digest(agent),
                                  "epsilon": agent.eps, "replay_size": len(agent.memory)})
@@ -281,6 +295,7 @@ if __name__ == "__main__":
                         default="diagnostic")
     parser.add_argument("--manifest", help="Formal scenario manifest JSON")
     parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
+    parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
@@ -297,4 +312,5 @@ if __name__ == "__main__":
                       continuous_delay_scale_ms=args.continuous_delay_scale_ms)
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
                    episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
-                   split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id)
+                   split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
+                   seed=args.seed)

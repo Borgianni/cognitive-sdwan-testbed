@@ -38,6 +38,7 @@ if __name__ == "__main__":
                         default="diagnostic")
     parser.add_argument("--manifest", help="Formal scenario manifest JSON")
     parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
+    parser.add_argument("--seed", type=int, help="Run/agent seed; required for formal splits")
     args = parser.parse_args()
     
     run_experiment(
@@ -54,5 +55,6 @@ if __name__ == "__main__":
                         continuous_delay_scale_ms=args.continuous_delay_scale_ms),
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
         split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
+        seed=args.seed,
         start_cli=args.cli
     )

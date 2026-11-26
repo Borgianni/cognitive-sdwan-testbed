@@ -34,7 +34,15 @@ def metadata_path(path):
     return Path(str(path) + ".json")
 
 
-def save_checkpoint(agent, cfg, path, protocol=None):
+def validate_run_seed(seed, required=False):
+    if seed is None and not required:
+        return
+    if type(seed) is not int or not 0 <= seed <= 2**32 - 1:
+        raise ValueError("Use an explicit integer run seed in [0, 2**32-1]")
+
+
+def save_checkpoint(agent, cfg, path, protocol=None, run_seed=None):
+    validate_run_seed(run_seed, required=protocol is not None and protocol["split"] == "train")
     path = Path(path)
     if path.suffix != ".keras":
         raise ValueError("Use a .keras checkpoint filename")
@@ -44,7 +52,7 @@ def save_checkpoint(agent, cfg, path, protocol=None):
     agent.save(str(path))
     meta = {"observation_schema": 2, "rl_config": asdict(cfg), "checkpoint_sha256": file_digest(path),
             "weights_sha256": weights_digest(agent),
-            "training_protocol": protocol}
+            "training_protocol": protocol, "training_seed": run_seed}
     with metadata_path(path).open("x", encoding="utf-8") as stream:
         json.dump(meta, stream, indent=2)
 
@@ -72,12 +80,15 @@ def checkpoint_config(path):
     return RLConfig(**fields), meta
 
 
-def load_frozen(agent, cfg, path, protocol=None):
+def load_frozen(agent, cfg, path, protocol=None, run_seed=None):
     saved_cfg, meta = checkpoint_config(path)
     if asdict(saved_cfg) != asdict(cfg):
         raise ValueError("Evaluation configuration differs from training checkpoint")
     if protocol is not None and protocol["split"] != "diagnostic":
         validate_training_provenance(meta.get("training_protocol"), protocol)
+        validate_run_seed(run_seed, required=True)
+        if type(meta.get("training_seed")) is not int or meta["training_seed"] != run_seed:
+            raise ValueError("Evaluation run seed must match the training checkpoint seed")
     agent.load(str(path))
     if weights_digest(agent) != meta["weights_sha256"]:
         raise ValueError("Loaded weights differ from checkpoint metadata")

@@ -9,6 +9,7 @@ import numpy as np
 
 from .config import RLConfig
 from .env import SDWANEnv
+from .experiment_protocol import validate_training_provenance
 
 
 def weights_digest(agent):
@@ -33,7 +34,7 @@ def metadata_path(path):
     return Path(str(path) + ".json")
 
 
-def save_checkpoint(agent, cfg, path):
+def save_checkpoint(agent, cfg, path, protocol=None):
     path = Path(path)
     if path.suffix != ".keras":
         raise ValueError("Use a .keras checkpoint filename")
@@ -42,7 +43,8 @@ def save_checkpoint(agent, cfg, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     agent.save(str(path))
     meta = {"observation_schema": 2, "rl_config": asdict(cfg), "checkpoint_sha256": file_digest(path),
-            "weights_sha256": weights_digest(agent)}
+            "weights_sha256": weights_digest(agent),
+            "training_protocol": protocol}
     with metadata_path(path).open("x", encoding="utf-8") as stream:
         json.dump(meta, stream, indent=2)
 
@@ -70,10 +72,12 @@ def checkpoint_config(path):
     return RLConfig(**fields), meta
 
 
-def load_frozen(agent, cfg, path):
+def load_frozen(agent, cfg, path, protocol=None):
     saved_cfg, meta = checkpoint_config(path)
     if asdict(saved_cfg) != asdict(cfg):
         raise ValueError("Evaluation configuration differs from training checkpoint")
+    if protocol is not None and protocol["split"] != "diagnostic":
+        validate_training_provenance(meta.get("training_protocol"), protocol)
     agent.load(str(path))
     if weights_digest(agent) != meta["weights_sha256"]:
         raise ValueError("Loaded weights differ from checkpoint metadata")

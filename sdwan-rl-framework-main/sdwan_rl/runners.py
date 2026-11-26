@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .policy_audit import append_trace, load_frozen, save_checkpoint, weights_digest, metadata_path
+from .experiment_protocol import read_manifest, resolve_run
 
 from .topology import SDWANTopo
 from .metrics import measure_link_tuple
@@ -63,11 +64,25 @@ def set_degradation(net, episode: int, ranges: Tuple[Tuple[int, int], ...]):
 # Experiment runner with configurable agent
 # ----------------------------------------------------------------------
 def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, episodes=None,
-                   mode='online', checkpoint=None, trace=None):
+                   mode='online', checkpoint=None, trace=None,
+                   split='diagnostic', manifest_path=None, scenario_id=None):
     """
     agent_type: 'dqn' or 'random'
     """
-    exp = exp if exp is not None else ExperimentConfig()
+    manifest = read_manifest(manifest_path) if manifest_path is not None else None
+    protocol = resolve_run(manifest, scenario_id, split, mode)
+    if split != "diagnostic":
+        if agent_type != "dqn" or not checkpoint or not trace:
+            raise ValueError("Formal runs require DQN, checkpoint and trace")
+        if exp is not None or episodes is not None:
+            raise ValueError("Formal runs use the manifest schedule; overrides are forbidden")
+        scenario = protocol["scenario"]
+        exp = ExperimentConfig(episodes=scenario["episodes"],
+                               ticks_per_episode=scenario["ticks_per_episode"],
+                               degrade_lte_ranges=tuple(map(tuple, scenario["degrade_lte_ranges"])))
+    else:
+        exp = exp if exp is not None else ExperimentConfig()
+    print(f"[INFO] Protocol split: {split}; scenario: {scenario_id or 'diagnostic'}")
     rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
     episode_count = exp.episodes if episodes is None else episodes
     if mode not in ("online", "frozen"):
@@ -109,13 +124,13 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
 
     initial_weights = None
     if mode == "frozen":
-        load_frozen(agent, rl_cfg, checkpoint)
+        load_frozen(agent, rl_cfg, checkpoint, protocol=protocol)
         initial_weights = weights_digest(agent)
     if trace:
         append_trace(trace, {"kind": "run", "mode": mode, "checkpoint": checkpoint,
                             "initial_weights_sha256": weights_digest(agent),
                             "rl_config": asdict(rl_cfg), "experiment_config": asdict(exp),
-                            "episode_count": episode_count}, mode="x")
+                            "episode_count": episode_count, "protocol": protocol}, mode="x")
     topo = SDWANTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, controller=None, autoStaticArp=True)
     api = ControllerAPI()
@@ -187,7 +202,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
             if weights_digest(agent) != initial_weights or agent.eps != 0 or len(agent.memory):
                 raise RuntimeError("Frozen evaluation changed weights, epsilon or replay")
         if mode == "online" and checkpoint:
-            save_checkpoint(agent, rl_cfg, checkpoint)
+            save_checkpoint(agent, rl_cfg, checkpoint, protocol=protocol)
         if trace:
             append_trace(trace, {"kind": "complete", "weights_sha256": weights_digest(agent),
                                  "epsilon": agent.eps, "replay_size": len(agent.memory)})
@@ -237,12 +252,14 @@ if __name__ == "__main__":
     parser.add_argument("--continuous-delay-scale-ms", type=float,
                         default=RLConfig.continuous_delay_scale_ms,
                         help="Common RTT normalization scale in ms (continuous only)")
+    parser.add_argument("--split", choices=["diagnostic", "train", "calibration", "held_out_test"],
+                        default="diagnostic")
+    parser.add_argument("--manifest", help="Formal scenario manifest JSON")
+    parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
     args = parser.parse_args()
 
     # Optional: override episode count from command line
-    exp_cfg = ExperimentConfig()
-    if args.episodes is not None:
-        exp_cfg.episodes = args.episodes
+    exp_cfg = None if args.manifest else ExperimentConfig()
 
     rl_cfg = RLConfig(lte_loss_threshold_pct=args.lte_loss_threshold_pct,
                       sat_loss_threshold_pct=args.sat_loss_threshold_pct,
@@ -254,4 +271,5 @@ if __name__ == "__main__":
                       state_representation=args.state_representation,
                       continuous_delay_scale_ms=args.continuous_delay_scale_ms)
     run_experiment(agent_type=args.agent_type, exp=exp_cfg, rl_cfg=rl_cfg, start_cli=args.cli,
-                   mode=args.mode, checkpoint=args.checkpoint, trace=args.trace)
+                   episodes=args.episodes, mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
+                   split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id)

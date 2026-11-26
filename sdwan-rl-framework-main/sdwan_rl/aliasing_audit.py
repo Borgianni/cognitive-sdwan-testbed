@@ -102,7 +102,7 @@ def compare_encodings(snapshots, cfg):
     return {mode: audit(snapshots, encoding_config(cfg, mode)) for mode in MODES}
 
 
-def snapshots_from_trace(path):
+def snapshots_from_trace(path, required_split=None):
     """Read decision-time telemetry, never the post-decision measurement."""
     with open(path, encoding="utf-8") as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
@@ -115,6 +115,10 @@ def snapshots_from_trace(path):
     if (rows[0]["initial_weights_sha256"] != rows[-1]["weights_sha256"]
             or rows[-1]["epsilon"] != 0 or rows[-1]["replay_size"] != 0):
         raise ValueError("Frozen trace integrity check failed")
+    if required_split is not None:
+        protocol = rows[0].get("protocol") or {}
+        if protocol.get("split") != required_split:
+            raise ValueError(f"Trace must originate from the {required_split} split")
     cfg = RLConfig(**rows[0]["rl_config"])
     snapshots = []
     skipped = 0

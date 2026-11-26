@@ -34,6 +34,10 @@ if __name__ == "__main__":
     parser.add_argument("--continuous-delay-scale-ms", type=float,
                         default=RLConfig.continuous_delay_scale_ms,
                         help="Common RTT normalization scale in ms (continuous only)")
+    parser.add_argument("--split", choices=["diagnostic", "train", "calibration", "held_out_test"],
+                        default="diagnostic")
+    parser.add_argument("--manifest", help="Formal scenario manifest JSON")
+    parser.add_argument("--scenario-id", help="Scenario identifier in the manifest")
     args = parser.parse_args()
     
     run_experiment(
@@ -49,5 +53,6 @@ if __name__ == "__main__":
                         state_representation=args.state_representation,
                         continuous_delay_scale_ms=args.continuous_delay_scale_ms),
         mode=args.mode, checkpoint=args.checkpoint, trace=args.trace,
+        split=args.split, manifest_path=args.manifest, scenario_id=args.scenario_id,
         start_cli=args.cli
     )

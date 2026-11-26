@@ -156,7 +156,7 @@ def main():
         if args.trace:
             if args.config:
                 parser.error("--config cannot override trace configuration")
-            snapshots, cfg, skipped = snapshots_from_trace(args.trace)
+            snapshots, cfg, skipped = snapshots_from_trace(args.trace, required_split="calibration")
         else:
             with open(args.snapshots, encoding="utf-8") as stream:
                 snapshots = json.load(stream)
@@ -172,7 +172,7 @@ def main():
                                  for mode in ("legacy_code", "legacy_paper", "continuous")},
                   "interpretation": "Hindsight observation diagnostics, not trained policy results. "
                                     "Continuous singleton groups can mechanically yield zero gap. "
-                                    "Split is user-declared, not independently verified."}
+                                    "Raw snapshot split is user-declared; trace split must be calibration."}
     print(json.dumps(report, indent=2, allow_nan=False))
 
 

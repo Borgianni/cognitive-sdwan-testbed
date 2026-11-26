@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "train_example",
+      "split": "train",
+      "episodes": 60,
+      "ticks_per_episode": 20,
+      "degrade_lte_ranges": [
+        [
+          30,
+          40
+        ]
+      ]
+    },
+    {
+      "id": "cal_example",
+      "split": "calibration",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "degrade_lte_ranges": [
+        [
+          5,
+          8
+        ]
+      ]
+    },
+    {
+      "id": "test_example",
+      "split": "held_out_test",
+      "episodes": 20,
+      "ticks_per_episode": 20,
+      "degrade_lte_ranges": [
+        [
+          11,
+          15
+        ]
+      ]
+    }
+  ]
+}

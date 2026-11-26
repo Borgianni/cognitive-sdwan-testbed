@@ -6,7 +6,11 @@ from .scenario_profiles import normalize_v2
 
 def add_telemetry_arguments(parser):
     for name, default in asdict(TelemetryConfig()).items():
-        parser.add_argument("--" + name.replace("_", "-"), type=type(default), default=default)
+        flag = "--" + name.replace("_", "-")
+        if type(default) is bool:
+            parser.add_argument(flag, action="store_true", default=default)
+        else:
+            parser.add_argument(flag, type=type(default), default=default)
 
 
 def telemetry_kwargs(args):

@@ -17,7 +17,7 @@ WORKER = Path(__file__).with_name("udp_measure.py").resolve()
 
 
 def flow_table(node):
-    text = checked(node, ["ovs-ofctl", "-O", "OpenFlow13", "dump-flows", node.name])
+    text = checked(node, ["ovs-ofctl", "-O", "OpenFlow13", "--no-names", "dump-flows", node.name])
     entries = {}
     for line in text.splitlines():
         cookie = re.search(r"cookie=0x([0-9a-fA-F]+)", line)
@@ -174,8 +174,15 @@ class TelemetryCollector:
                                              start, deadline, cfg.window_s)
                    for name, stream in spec["streams"].items()}
         evidence = flow_evidence(before_flows, after_flows, action, self.probes)
-        if streams["primary"]["received_packets"] > evidence["primary"]["3"]["selected_tunnel_receive"]["packets"]:
+        if (streams["primary"]["received_packets"] > evidence["primary"]["3"]["selected_tunnel_receive"]["packets"]
+                or streams["primary"]["echo_received_packets"] > evidence["primary"]["1"]["selected_tunnel_receive"]["packets"]):
             raise RuntimeError("Primary receives exceed selected-path forwarding evidence")
+        if self.probes:
+            for tunnel in TUNNELS:
+                counts = evidence["probes"][tunnel]
+                if (streams[tunnel]["received_packets"] > counts["forward_egress"]["packets"]
+                        or streams[tunnel]["echo_received_packets"] > counts["reverse_egress"]["packets"]):
+                    raise RuntimeError(f"{tunnel} receives exceed pinned-path forwarding evidence")
         metrics, windows = {}, {}
         for tunnel in TUNNELS:
             if after[tunnel]["time_s"] < deadline:

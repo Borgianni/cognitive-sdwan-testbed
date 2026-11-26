@@ -11,7 +11,12 @@ C24: run fixed trained weights with observation lag 0,1,2 on a
 predeclared matched subset. The extra lag changes policy input only;
 same measurement settings, model and scenario/seed IDs. Compare
 actual measured age and primary QoS; exclude max(lag)+1 startup
-ticks equally in each arm. No silent partial matrices. Actual
+ticks equally in each arm. For impairment-onset analysis use
+--carry-observations-across-episodes in every frozen arm, including
+lag zero. This preserves pre-impairment observations across artificial
+episode boundaries, with common startup exclusion only at run start.
+This is a separate stress experiment; ordinary training and benchmarking
+retain episode observation resets. No silent partial matrices. Actual
 network randomness may differ; lag is an artificial stress factor.
 
 C27: TX bytes are measured at source tunnel interfaces with actual
@@ -31,7 +36,7 @@ is separate and remains present when additional tunnel probes are off.
 
 The probe_impact module runs fixed-action calibration scenarios
 with identical primary/background settings, extra probes on/off.
-Separate from RL benchmarking, because disabling observations
+The plan also fixes the telemetry configuration. Separate from RL benchmarking, because disabling observations
 would otherwise change the policy. The plan randomizes order
 within each replicate pair; execute the listed order in separate
 emulations, preserving failed runs. Seed is a replicate identifier,

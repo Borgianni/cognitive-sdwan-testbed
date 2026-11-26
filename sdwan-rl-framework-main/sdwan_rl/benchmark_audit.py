@@ -12,7 +12,7 @@ from .config import RLConfig
 from .cost_audit import cost_qos_summary
 from .experiment_protocol import resolve_run, validate_training_provenance
 from .policy_audit import validate_run_seed
-from .telemetry_core import TelemetryConfig, observation_index, observation_age
+from .telemetry_core import TelemetryConfig, observation_index, observation_age, observation_source
 
 
 def snapshot_gap(metrics, action, cfg):
@@ -102,17 +102,21 @@ def audit_trace(path):
             raise ValueError("Invalid action or logged reward")
         previous = row["decision_metrics"]
         current = row["measurement_metrics"]
-        if tick == 0 and previous is not None:
-            raise ValueError("Expected reset decision observation")
-        source_tick = observation_index(tick, telemetry_cfg.observation_lag_ticks if telemetry_cfg else 0)
-        if source_tick is not None:
-            source = rows[1 + (ep - 1) * ticks + source_tick]
+        source_index = observation_source(ep, tick, ticks, telemetry_cfg or TelemetryConfig())
+        if source_index is None:
+            if previous is not None:
+                raise ValueError("Expected cold-start decision observation")
+        else:
+            source = rows[1 + source_index]
             if previous != source["measurement_metrics"]:
                 raise ValueError("Decision telemetry must match the declared past tick")
         if telemetry_cfg is not None:
-            expected_age = None if source_tick is None else observation_age(
+            expected_age = None if source_index is None else observation_age(
                 source["measurement_windows"], row["decision_time_s"])
-            if (row.get("decision_source_tick") != source_tick or row.get("decision_age") != expected_age):
+            if (row.get("decision_source_index") != source_index
+                    or row.get("decision_source_tick") != (None if source_index is None else source_index % ticks)
+                    or row.get("decision_source_episode") != (None if source_index is None else source_index // ticks + 1)
+                    or row.get("decision_age") != expected_age):
                 raise ValueError("Decision source or telemetry age differs from recorded windows")
             if row.get("controller_ack", {}).get("action") != action or row["controller_ack"].get("barrier_acknowledged") is not True:
                 raise ValueError("Missing acknowledged routing action")

@@ -12,6 +12,7 @@ class TelemetryConfig:
     primary_packets: int = 500
     primary_payload_bytes: int = 512
     observation_lag_ticks: int = 0
+    carry_observations_across_episodes: bool = False
 
     def __post_init__(self):
         for key in ("window_s", "grace_s"):
@@ -29,8 +30,12 @@ class TelemetryConfig:
         if type(self.observation_lag_ticks) is not int or self.observation_lag_ticks < 0:
             raise ValueError("Observation lag must be a nonnegative number of ticks")
 
+        if type(self.carry_observations_across_episodes) is not bool:
+            raise ValueError("carry_observations_across_episodes must be boolean")
+
     def measurement_settings(self):
-        return {k: v for k, v in asdict(self).items() if k != "observation_lag_ticks"}
+        return {k: v for k, v in asdict(self).items()
+                if k not in ("observation_lag_ticks", "carry_observations_across_episodes")}
 
 
 PORTS = {"lte": 5201, "satellite": 5202, "primary": 5300}
@@ -100,6 +105,22 @@ def observation_index(tick, lag):
     if type(tick) is not int or type(lag) is not int or min(tick, lag) < 0:
         raise ValueError("Invalid tick or lag")
     return None if tick == 0 else max(0, tick - 1 - lag)
+
+
+def observation_source(episode, tick, ticks_per_episode, cfg):
+    """Return the zero-based global sample index, or None for cold start.
+
+    The optional continuous-history stress test can observe samples from
+    before episode-boundary impairments. Standard experiments keep resets.
+    """
+    if (type(episode) is not int or episode < 1 or type(tick) is not int
+            or type(ticks_per_episode) is not int or not 0 <= tick < ticks_per_episode):
+        raise ValueError("Invalid episode/tick")
+    offset = (episode - 1) * ticks_per_episode
+    if cfg.carry_observations_across_episodes:
+        return observation_index(offset + tick, cfg.observation_lag_ticks)
+    source = observation_index(tick, cfg.observation_lag_ticks)
+    return None if source is None else offset + source
 
 
 def observation_age(windows, decision_s):

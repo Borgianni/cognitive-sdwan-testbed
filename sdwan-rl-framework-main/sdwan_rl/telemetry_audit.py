@@ -5,7 +5,7 @@ import math
 from dataclasses import asdict
 from statistics import fmean, stdev
 
-from .telemetry_core import TelemetryConfig, observation_index, observation_age
+from .telemetry_core import TelemetryConfig, observation_source, observation_age
 
 
 def distribution(values):
@@ -68,11 +68,13 @@ def read_timed_trace(path):
         ep, tick = i // ticks + 1, i % ticks
         if row.get("kind") != "decision" or row["episode"] != ep or row["tick"] != tick:
             raise ValueError("Unordered or missing tick")
-        source_tick = observation_index(tick, cfg.observation_lag_ticks)
-        if source_tick != row.get("decision_source_tick"):
+        source_index = observation_source(ep, tick, ticks, cfg)
+        if (source_index != row.get("decision_source_index")
+                or row.get("decision_source_tick") != (None if source_index is None else source_index % ticks)
+                or row.get("decision_source_episode") != (None if source_index is None else source_index // ticks + 1)):
             raise ValueError("Incorrect source tick")
-        if source_tick is not None:
-            source = records[(ep - 1) * ticks + source_tick]
+        if source_index is not None:
+            source = records[source_index]
             if (row["decision_metrics"] != source["measurement_metrics"]
                     or row["decision_age"] != observation_age(source["measurement_windows"], row["decision_time_s"])):
                 raise ValueError("Incorrect telemetry source/age")
@@ -133,7 +135,8 @@ def age_study(paths, seeds, scenarios, lags=(0, 1, 2)):
         key = (audit["seed"], audit["scenario_id"], cfg.observation_lag_ticks)
         if key not in expected or key in observed:
             raise ValueError("Unexpected or duplicate age study result")
-        signature = (audit["manifest_sha256"], audit["rl_config"], cfg.measurement_settings())
+        signature = (audit["manifest_sha256"], audit["rl_config"], cfg.measurement_settings(),
+                     cfg.carry_observations_across_episodes)
         if reference is None:
             reference = signature
         elif reference != signature:
@@ -141,7 +144,9 @@ def age_study(paths, seeds, scenarios, lags=(0, 1, 2)):
         model = (audit["model_weights_sha256"], audit["training_protocol"])
         if models.setdefault(key[0], model) != model:
             raise ValueError("Frozen checkpoint differs within replicate")
-        steady = [r for r in records if r["tick"] >= startup]
+        steady = ([r for index, r in enumerate(records) if index >= startup]
+                  if cfg.carry_observations_across_episodes
+                  else [r for r in records if r["tick"] >= startup])
         if not steady:
             raise ValueError("No common steady-state ticks after lag warm-up")
         observed[key] = {"seed": key[0], "scenario": key[1], "lag": key[2],
@@ -162,7 +167,9 @@ def age_study(paths, seeds, scenarios, lags=(0, 1, 2)):
             summaries.append({"scenario": scenario, "lag": lag,
                               "mean_actual_oldest_completion_age_s": fmean(r["oldest_completion_age_s"]["mean"] for r in rows),
                               "metrics": metrics})
-    return {"common_startup_ticks_excluded": startup, "runs": list(observed.values()),
+    return {"common_startup_ticks_excluded": startup,
+            "startup_scope": "run" if reference[-1] else "episode",
+            "runs": list(observed.values()),
             "summaries": summaries, "interpretation": "Artificial lag stress test; not a convergence or causal guarantee."}
 
 

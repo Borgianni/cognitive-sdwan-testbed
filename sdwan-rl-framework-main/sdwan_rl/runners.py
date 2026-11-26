@@ -17,7 +17,7 @@ from .scenario_runtime import ScenarioRuntime
 from .scenario_profiles import nominal_profiles
 
 from .topology import SDWANTopo
-from .telemetry_core import TelemetryConfig, observation_age, observation_index
+from .telemetry_core import TelemetryConfig, observation_age, observation_index, observation_source
 from .telemetry_cli import add_telemetry_arguments, telemetry_kwargs, runtime_scenario
 from .telemetry_runtime import TelemetryCollector
 from .controller_api import ControllerAPI
@@ -69,8 +69,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
     print(f"[INFO] Protocol split: {split}; scenario: {scenario_id or 'diagnostic'}")
     rl_cfg = rl_cfg if rl_cfg is not None else RLConfig()
     telemetry_cfg = telemetry_cfg if telemetry_cfg is not None else TelemetryConfig()
-    if telemetry_cfg.observation_lag_ticks and (agent_type != 'dqn' or mode != 'frozen'):
-        raise ValueError('Artificial telemetry lag is a frozen DQN diagnostic only')
+    if (telemetry_cfg.observation_lag_ticks or telemetry_cfg.carry_observations_across_episodes) and (
+            agent_type != "dqn" or mode != "frozen"):
+        raise ValueError("Artificial lag/continuous observation history is a frozen DQN diagnostic only")
     episode_count = exp.episodes if episodes is None else episodes
     nominal = nominal_profiles()
     if (rl_cfg.lte_capacity_mbps != nominal["lte"]["capacity_mbps"]
@@ -174,6 +175,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
         runtime = ScenarioRuntime(net, network_scenario)
         collector = TelemetryCollector(net, telemetry_cfg)
         collector.install()
+        history = []
         for ep in range(1, episode_count + 1):
             current_ep, current_tick = ep, None
             setup_start = time.monotonic()
@@ -183,7 +185,7 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 runtime.start_traffic()
             env.reset_metrics()
             decision_env.reset_metrics()
-            history, episode_reward = [], 0.0
+            episode_reward = 0.0
             if agent_type in HEURISTIC_AGENTS:
                 agent.reset()
             episode_setup = {"start_s": setup_start, "impairment_applied_s": impairment_applied_s,
@@ -193,9 +195,9 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 latest_measurement = None
                 tick_start = time.monotonic()
                 phases = {}
-                source_tick = observation_index(t, telemetry_cfg.observation_lag_ticks)
-                decision_metrics = None if source_tick is None else history[source_tick]["metrics"]
-                decision_windows = None if source_tick is None else history[source_tick]["windows"]
+                source_index = observation_source(ep, t, exp.ticks_per_episode, telemetry_cfg)
+                decision_metrics = None if source_index is None else history[source_index]["metrics"]
+                decision_windows = None if source_index is None else history[source_index]["windows"]
                 if decision_metrics is None:
                     decision_env.reset_metrics()
                 else:
@@ -239,7 +241,12 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 metrics["episode"]["total reward"] = episode_reward
                 history.append({"metrics": metrics, "windows": latest_measurement["measurement_windows"]})
                 done = t == exp.ticks_per_episode - 1
-                next_source = observation_index(t + 1, telemetry_cfg.observation_lag_ticks)
+                if done:
+                    # Terminal transition never bootstraps; retain current measurement
+                    # rather than invent a next observation for the reset.
+                    next_source = len(history) - 1
+                else:
+                    next_source = observation_source(ep, t + 1, exp.ticks_per_episode, telemetry_cfg)
                 decision_env.update_from_metrics(history[next_source]["metrics"])
                 next_state = decision_env.make_state().vec
                 phases["reward_and_next_state_s"] = time.monotonic() - phase_start
@@ -259,8 +266,11 @@ def run_experiment(agent_type='dqn', exp=None, rl_cfg=None, start_cli=False, epi
                 if trace:
                     record = {
                         "kind": "decision", "episode": ep, "tick": t,
-                        "decision_metrics": decision_metrics, "decision_source_tick": source_tick,
-                        "effective_observation_lag_ticks": None if source_tick is None else t - 1 - source_tick,
+                        "decision_metrics": decision_metrics,
+                        "decision_source_index": source_index,
+                        "decision_source_episode": None if source_index is None else source_index // exp.ticks_per_episode + 1,
+                        "decision_source_tick": None if source_index is None else source_index % exp.ticks_per_episode,
+                        "effective_observation_lag_ticks": None if source_index is None else len(history) - 2 - source_index,
                         "decision_time_s": decision_s, "decision_age": age,
                         "state": state.tolist(), "q_values": q_values.tolist() if q_values is not None else None,
                         "greedy_action": greedy_action, "action": int(action), "heuristic_details": heuristic_details,

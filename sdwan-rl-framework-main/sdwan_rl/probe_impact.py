@@ -15,7 +15,10 @@ from .telemetry_cli import add_telemetry_arguments, telemetry_kwargs
 from .telemetry_audit import primary_summary
 
 
-def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801):
+def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801, cfg=None):
+    cfg = cfg if cfg is not None else TelemetryConfig()
+    if cfg.observation_lag_ticks or cfg.carry_observations_across_episodes:
+        raise ValueError('Probe-impact runs do not use policy history')
     scenarios, seeds, actions = list(scenarios), list(seeds), list(actions)
     validate_run_seed(order_seed, required=True)
     if any(not values or len(set(values)) != len(values) for values in (scenarios, seeds, actions)):
@@ -39,6 +42,7 @@ def plan(manifest, scenarios, seeds, actions=(0, 1), order_seed=8801):
                                for p in conditions)
     return {"manifest_sha256": digest(manifest), "scenarios": scenarios, "seeds": seeds,
             "actions": actions, "order_seed": order_seed, "entries": entries,
+            "telemetry_config": asdict(cfg),
             "status": "planned_not_executed"}
 
 
@@ -53,7 +57,8 @@ def run(manifest, scenario_id, seed, action, probes, cfg, trace):
     validate_run_seed(seed, required=True)
     protocol = resolve_run(manifest, scenario_id, "calibration", "heuristic")
     scenario = protocol["scenario"]
-    if "events" not in scenario or cfg.observation_lag_ticks or type(action) is not int or action not in (0, 1):
+    if ("events" not in scenario or cfg.observation_lag_ticks or cfg.carry_observations_across_episodes
+            or type(action) is not int or action not in (0, 1)):
         raise ValueError("Use v2 calibration, fixed action and lag zero")
     run_id = uuid.uuid4().hex
     append_trace(trace, {"kind": "probe_impact", "run_id": run_id, "protocol": protocol,
@@ -107,7 +112,7 @@ def read_run(path):
     if resolve_run(protocol["manifest"], protocol["scenario_id"], "calibration", "heuristic") != protocol:
         raise ValueError("Probe-impact provenance differs")
     cfg = TelemetryConfig(**header["telemetry_config"])
-    if cfg.observation_lag_ticks or type(header["probes"]) is not bool:
+    if cfg.observation_lag_ticks or cfg.carry_observations_across_episodes or type(header["probes"]) is not bool:
         raise ValueError("Invalid probe-impact configuration")
     scenario = protocol["scenario"]
     ticks = scenario["ticks_per_episode"]
@@ -130,7 +135,7 @@ def compare(paths, design):
     expected = {(r["scenario_id"], r["seed"], r["action"], r["probes"]) for r in design["entries"]}
     if len(expected) != len(design["entries"]) or not expected:
         raise ValueError("Invalid paired design")
-    observed, common = {}, None
+    observed, common = {}, design["telemetry_config"]
     for path in paths:
         header, windows = read_run(path)
         protocol = header["protocol"]
@@ -138,9 +143,7 @@ def compare(paths, design):
         if key not in expected or key in observed or protocol["manifest_sha256"] != design["manifest_sha256"]:
             raise ValueError("Unexpected or duplicate probe-impact result")
         cfg = header["telemetry_config"]
-        if common is None:
-            common = cfg
-        elif cfg != common:
+        if cfg != common:
             raise ValueError("Different measurement configurations")
         observed[key] = primary_summary(r["telemetry"] for r in windows)
     if set(observed) != expected:
@@ -201,6 +204,7 @@ def main():
     planning.add_argument("--seeds", nargs="+", type=int, required=True)
     planning.add_argument("--actions", nargs="+", type=int, default=[0, 1])
     planning.add_argument("--order-seed", type=int, default=8801)
+    add_telemetry_arguments(planning)
     running = sub.add_parser("run")
     running.add_argument("--manifest", required=True)
     running.add_argument("--scenario-id", required=True)
@@ -220,7 +224,8 @@ def main():
             args.probes == "on", TelemetryConfig(**telemetry_kwargs(args)), args.trace)
         return
     if args.command == "plan":
-        value = plan(read_manifest(args.manifest), args.scenarios, args.seeds, args.actions, args.order_seed)
+        value = plan(read_manifest(args.manifest), args.scenarios, args.seeds, args.actions,
+                     args.order_seed, TelemetryConfig(**telemetry_kwargs(args)))
     elif args.command == "compare":
         value = compare(args.traces, json.loads(Path(args.plan).read_text()))
     else:

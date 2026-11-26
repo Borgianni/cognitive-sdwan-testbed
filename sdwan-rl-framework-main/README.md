@@ -15,12 +15,12 @@ It implements a continuous **Perception → Learning → Decision → Action** c
 ## Features
 
 * Reproducible experiments through centralized configuration
-* Real-time closed-loop SD-WAN control
-* Modular agent architecture (DQN, Random, EWMA baseline)
+* Periodic measurement-driven closed-loop overlay control (integration validation pending)
+* Modular agent architecture (DQN, uniform Random, EWMA, Greedy Utility)
 * Configurable link degradation profiles
 * Automatic logging of network and learning metrics
 * LTE + LEO satellite dual-tunnel scenario
-* Easily extensible to additional tunnels and routing strategies
+* Configurable experiment manifests; current verified design scope is dual-site/dual-tunnel
 * Open-source and research-oriented design
 
 ---
@@ -87,7 +87,8 @@ sdwan-rl-framework/
 | Component              | Description                             |
 | ---------------------- | --------------------------------------- |
 | `topology.py`          | Mininet SD-WAN topology definition      |
-| `metrics.py`           | Delay, throughput and loss measurements |
+| `telemetry_runtime.py` | Overlapping UDP measurements, TX counters and forwarding evidence |
+| `metrics.py`           | Historical sequential probes; not used by revised runner |
 | `env.py`               | RL environment and reward calculation   |
 | `controller_api.py`    | REST communication with Ryu             |
 | `runners.py`           | Experiment orchestration                |
@@ -114,13 +115,13 @@ For macOS or Windows users, run the framework inside a Linux virtual machine (UT
 * Mininet
 * Ryu
 * iperf
-* bwm-ng
+* iproute2 and Open vSwitch
 
 Install system dependencies on Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y mininet bwm-ng iperf python3-pip
+sudo apt install -y mininet openvswitch-switch iproute2 iperf python3-pip
 ```
 
 ---
@@ -130,8 +131,8 @@ sudo apt install -y mininet bwm-ng iperf python3-pip
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/Delaram73/sdwan-rl-framework.git
-cd sdwan-rl-framework
+git clone -b major-revision-tnsm https://github.com/Borgianni/cognitive-sdwan-testbed.git
+cd cognitive-sdwan-testbed/sdwan-rl-framework-main
 ```
 
 ### 2. Create a Virtual Environment
@@ -157,10 +158,12 @@ pip install ryu
 Open a dedicated terminal:
 
 ```bash
-ryu-manager ryu_apps/switch_controller.py
+ryu-manager --ofp-tcp-listen-port 6653 --wsapi-port 8080 ryu_apps/switch_controller.py
 ```
 
 ### Step 2 — Run an Experiment
+
+> Revision branch: first validate the Linux/Mininet/Ryu environment and run short diagnostic smoke tests. The examples below are diagnostic, not the final held-out campaign. Run the controller and emulation on an isolated local test host. See `docs/revision-r1-c23-c27-integration.md` and `docs/revision-r1-c24-c28-validation.md` for formal telemetry and timing protocols.
 
 From the project root:
 
@@ -215,18 +218,13 @@ Contains:
 * Reward values
 * Cost metrics
 
-### Agent Decisions
+### Agent Decisions and Timing
 
-```text
-network_decision1.log
-```
-
-Contains:
-
-* Episode number
-* Tick number
-* Selected actions
-* Obtained rewards
+Use a fresh `--trace run.jsonl` path to record full decisions,
+observations, measurement timestamps, primary/probe counters, rewards,
+training updates and phase timing. `network_metrics.log` is the
+controller's secondary CSV log, not the primary scientific trace.
+The previous `network_decision1.log` is no longer generated.
 
 ---
 
@@ -339,10 +337,10 @@ The provided `RandomAgent` can be used as a minimal reference implementation.
 
 To ensure reproducibility:
 
-* Random seeds are fixed
+* Formal runs require explicit seeds and record actual runtime versions
 * Experimental parameters are centralized in `config.py`
-* Link degradation schedules are deterministic
-* Logs include all episodes, ticks, actions, rewards and metrics
+* Randomized impairment schedules are generated before runs and saved in versioned manifests
+* New JSONL traces include all completed decisions and explicit failure records
 * The entire framework is version controlled
 
 ---

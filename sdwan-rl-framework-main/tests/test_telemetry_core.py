@@ -1,7 +1,7 @@
 import unittest
 
 from sdwan_rl.telemetry_core import (TelemetryConfig, throughput_mbps, stream_specs,
-                                    stream_measurement, observation_age, observation_index)
+                                    stream_measurement, observation_age, observation_index, observation_source)
 
 
 class TelemetryCoreTests(unittest.TestCase):
@@ -45,6 +45,15 @@ class TelemetryCoreTests(unittest.TestCase):
         row = stream_measurement(c, s, stream_specs(TelemetryConfig())["lte"], 1, 4.5, 2)
         self.assertEqual(row["loss_pct"], 100)
         self.assertIsNone(row["rtt_ms"])
+
+    def test_cross_episode_history_stress(self):
+        reset = TelemetryConfig(observation_lag_ticks=2)
+        carry = TelemetryConfig(observation_lag_ticks=2, carry_observations_across_episodes=True)
+        self.assertIsNone(observation_source(2, 0, 20, reset))
+        self.assertEqual(observation_source(2, 0, 20, carry), 17)
+        self.assertEqual(observation_source(2, 1, 20, carry), 18)
+        self.assertEqual(observation_source(1, 1, 20, carry), 0)
+        self.assertEqual(reset.measurement_settings(), carry.measurement_settings())
 
     def test_causal_lag_and_age(self):
         self.assertEqual([observation_index(i, 2) for i in range(7)], [None, 0, 0, 0, 1, 2, 3])
